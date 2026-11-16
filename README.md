@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.9 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.10 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,14 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.10: explicit manual export of an observed Pomodoro *lower bound*
+
+A user may optionally map a **separate existing Notion Number property**, such as `Observed Pomodoros (partial)`, for a carefully bounded count of actual **observed** automatic Pomodoro completions. This **must not** be your authoritative `Completed Pomodoros` field. The count is an incomplete, cumulative per-task minimum: historical sessions, Android background restrictions, missing hook events and plugin restarts may all produce undercounts. Only the official observer's records with stable unique session IDs, known linked SP task IDs and a verified automatic Pomodoro completion qualify. No Pomodoros are inferred from tracked time.
+
+Workflow: configure the existing Notion board source/property, click **Pin task property IDs** to lock the Number property's identity, run the standard task preview, select linked tasks, click **Review observed Pomodoro minimum** and inspect the staged `before → after` values. The **separate authorization checkbox** and **Write reviewed observed minimum** action are mandatory for any update. The writeback re-reads the Notion schema and page, checks original data source/type/property/value, re-reads the SP task mapping and the full observer key inventory, and aborts stale/conflicting items. It never overwrites a larger existing number or writes zero. More than 2,000 records refuse rather than silently truncate. Only one existing Number property is patched per page. There is no background timer/network action, no automatic sync and no creation/renaming of Notion databases, pages or properties. Tests are mocked; real SP Desktop/Android and Notion sandbox integration are not yet verified.
+
+**This is a review-only alpha bridge, not a solution to the upstream focus-session API gap.** The stable per-task/per-mode authoritative historical session API is still required for dependable `Completed Pomodoros` synchronization. Some GET/PATCH races cannot be prevented with Notion's public API, so do not use this with production data yet.
 
 ### New v0.9: read-only Pomodoro planning versus observed SP focus sessions
 
