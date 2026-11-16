@@ -189,6 +189,52 @@ if (typeof PluginAPI !== 'undefined') {
 // Only individually seeded Notion-page/SP-task baseline IDs are eligible.
 // No import, no Notion writes, no timer control or automatic bidirectional sync.
 
+// All three opt-in engines share ONE Notion request lane per plugin runtime.
+// Notion documents an average 3 requests/second per integration; a 450ms
+// interval stays below that under normal load. It does not coordinate with
+// other devices or manual Notion requests from the iframe.
+const ALF_NOTION_REQUEST_MIN_GAP_MS=450;
+let alfNotionRequestLane=Promise.resolve();
+let alfNotionLastStartedAt=0;
+function alfExplicitRateLimit(error) {
+  if(!error)return false;
+  const code=Number(error.status || error.statusCode ||
+    (error.response&&error.response.status) ||
+    (error.error&&error.error.status));
+  return code===429 || error.code==='rate_limited' ||
+    /(?:\\b429\\b|rate.?limit)/i.test(String(error.message||''));
+}
+async function alfNotionDelay(ms) {
+  if(ms>0 && typeof setTimeout==='function')
+    await new Promise(resolve=>setTimeout(resolve,ms));
+}
+function alfQueuedNotionRequest(api,url,options) {
+  // Never retry a timeout/unknown server outcome, especially a PATCH:
+  // an ambiguous success is resolved by the persisted numeric baseline.
+  const run=async()=>{
+    let retried=false;
+    for(;;){
+      await alfNotionDelay(Math.max(0,
+        alfNotionLastStartedAt+ALF_NOTION_REQUEST_MIN_GAP_MS-Date.now()));
+      alfNotionLastStartedAt=Date.now();
+      try {return await api.request(url,options);}
+      catch(error){
+        if(retried||!alfExplicitRateLimit(error))throw error;
+        // 429 explicitly means Notion rejected the request. One bounded
+        // re-attempt only, never a blind retry for a lost write response.
+        retried=true;
+        const retryAfter=Number(error.retryAfter ||
+          (error.response&&error.response.headers&&error.response.headers['retry-after']));
+        await alfNotionDelay(Number.isFinite(retryAfter)&&retryAfter>0?
+          Math.min(5000,Math.ceil(retryAfter*1000)):1200);
+      }
+    }
+  };
+  const result=alfNotionRequestLane.then(run);
+  alfNotionRequestLane=result.then(()=>undefined,()=>undefined);
+  return result;
+}
+
 const ALF_AUTO_STATUS_KEY='alf-auto-status-local-v1-';
 async function alfStoreAutoStatus(api,flow,stats) {
   if(typeof api.setSecret!=='function')return;
@@ -322,7 +368,7 @@ function alfCreateAutoPlanSync(api, options) {
   const opts=options || {}, maxBatch=opts.maxBatch || ALF_AUTO_PLAN_TASKS_PER_CYCLE;
   let cursor=0, busy=false, lastRun=0, interval=null;
   async function notion(token, path) {
-    return api.request('https://api.notion.com/v1'+path, {
+    return alfQueuedNotionRequest(api,'https://api.notion.com/v1'+path, {
       method:'GET',
       headers:{'Authorization':'Bearer '+token,'Notion-Version':'2026-03-11',
         'Content-Type':'application/json'},
@@ -527,7 +573,7 @@ function alfCreateAutoTimeSync(api,options) {
         'Content-Type':'application/json'},
       timeout:30000,responseType:'json'};
     if(body!==undefined)options.body=body;
-    return api.request('https://api.notion.com/v1'+path,options);
+    return alfQueuedNotionRequest(api,'https://api.notion.com/v1'+path,options);
   }
   async function runOnce() {
     const stats={enabled:false,processed:0,written:0,unchanged:0,conflicts:0,errors:0};
@@ -732,7 +778,7 @@ function alfCreateAutoHabitSync(api,options) {
         'Content-Type':'application/json'},
       timeout:30000,responseType:'json'};
     if(body!==undefined)req.body=body;
-    return api.request('https://api.notion.com/v1'+path,req);
+    return alfQueuedNotionRequest(api,'https://api.notion.com/v1'+path,req);
   }
   async function queryDay(token,spec,day,kind) {
     const t={property:spec.ids.typeId};
