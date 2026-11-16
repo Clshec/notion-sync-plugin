@@ -39,3 +39,7 @@
 - Real automated Pomodoro work-mode session completions need a stable SP structured focus-session API; they are not derivable from daily habit values.
 
 [Habit definitions](habit-mapping.md) · [Overall design](alf-sync.md) · [Task time writeback](time-writeback.md)
+
+### v0.13 post-preview duplicate/removed occurrence recheck
+
+The stage and commit paths use the same paginated Notion data-source query constrained by pinned item-type and logical-day property IDs. At commit, before writing any approved Number update, the plugin fetches the **current full set** of existing habit-day occurrences. It groups rows using `habitDefinitionId + logicalDay`, and each staged `pageId` is eligible only if the current group contains **exactly one** matching page. Newly created duplicates, removed/moved rows and changed relation/day prevent a write, while unrelated habit definitions remain independent. Truncated queries abort rather than choosing partial results. Existing per-page source/type/date/relation/Number before-value and SP counter/link revalidation still apply. No records or databases are created. Notion's public API still offers no atomic cross-device compare-and-swap, so real concurrent mutation during PATCH remains an unresolved risk.
