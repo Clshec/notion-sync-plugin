@@ -929,6 +929,176 @@ code {font:inherit;white-space:nowrap}
   }
 
 
+  // Observer facts are a conservative minimum, never a complete history.
+  // No synthetic Pomodoros are inferred from task timeSpent or daily metrics.
+  async function readVerifiedObservedPomodoros() {
+    if(typeof PluginAPI.listSyncedDataKeys!=='function')
+      throw new Error('SP synced data key API unavailable for observed Pomodoros');
+    var keys=await PluginAPI.listSyncedDataKeys('alf-focus-observed-v1-');
+    if(!Array.isArray(keys))throw new Error('Invalid SP observer index');
+    if(keys.length>2000)
+      throw new Error('More than 2000 observer keys; writing a truncated count is unsafe');
+    var byTask=new Map(),rejected=0,seen=new Set();
+    for(var key of keys) {
+      if(typeof key!=='string'||!key.startsWith('alf-focus-observed-v1-')) {
+        rejected++;continue;
+      }
+      var raw=await PluginAPI.loadSyncedData(key);
+      if(!raw){rejected++;continue;}
+      try {
+        var e=JSON.parse(raw);
+        if(!e||e.schemaVersion!==1||
+          typeof e.sessionId!=='string'||!e.sessionId||
+          key!=='alf-focus-observed-v1-'+e.sessionId||
+          typeof e.taskId!=='string'||!e.taskId.trim()||
+          e.source!=='live-sp-action-hook'||
+          e.mode!=='Pomodoro'||e.observedCompletion!==true||
+          e.automatic!==true||e.manual!==false||
+          e.verifiedCompletedPomodoro!==true||
+          !Number.isFinite(e.startedAt)||!Number.isFinite(e.endedAt)||
+          e.startedAt<0||e.endedAt<e.startedAt) {
+          rejected++;continue;
+        }
+        if(seen.has(e.sessionId))continue;
+        seen.add(e.sessionId);
+        if(!byTask.has(e.taskId))byTask.set(e.taskId,[]);
+        byTask.get(e.taskId).push(e.sessionId);
+      }catch(_){rejected++;}
+    }
+    for(var ids of byTask.values())ids.sort();
+    return {byTask:byTask,rejected:rejected,indexed:keys.length};
+  }
+  function observerIds(ledger,spId) {
+    return (ledger.byTask.get(spId)||[]).join(',');
+  }
+  async function stageObservedPomodoros() {
+    if(active)return;
+    busy(true);
+    stagedObservedPomo=null;
+    ui('authorizeObservedPomo').checked=false;
+    ui('observedPomoPlan').textContent='';
+    try {
+      var c=getForm();
+      if(!lastPreviewConfig||lastPreviewConfig!==JSON.stringify(c))
+        throw new Error('Refresh task preview before reviewing observed Pomodoros');
+      if(!c.observedPomoProp)
+        throw new Error('Map a dedicated existing observed-minimum Number property');
+      if(!taskPropertyId(c,'observedPomoProp'))
+        throw new Error('Pin stable task property IDs before observer writeback');
+      var selected=getSelectedPages();
+      if(!selected.length)throw new Error('Select at least one Notion task to review');
+      var sourceId=dataSourceId(c.taskSource,false);
+      var source=await notion('/data_sources/'+encodeURIComponent(sourceId));
+      var schema=source.properties||{},field=schemaTaskProperty(schema,c,'observedPomoProp');
+      if(!field||field.type!=='number'||propTypes(schema,c).length)
+        throw new Error('Notion source property/type changed: fix mapping and re-preview');
+      var ledger=await readVerifiedObservedPomodoros();
+      var tasks=[].concat(await PluginAPI.getTasks()||[],await PluginAPI.getArchivedTasks()||[]);
+      var staged=[],skipped=[];
+      for(var page of selected) {
+        try {
+          var linked=await findLinkedSpTask(page.id,tasks);
+          if(!linked){skipped.push('Unlinked: '+page.id);continue;}
+          var ids=observerIds(ledger,linked.id);
+          var after=ledger.byTask.has(linked.id)?ledger.byTask.get(linked.id).length:0;
+          if(!after){skipped.push('No verified observer records (not proof of zero): '+page.id);continue;}
+          var p=taskProperty(page,c,'observedPomoProp');
+          if(!p||p.type!=='number'||(p.number!==null &&
+              (!Number.isSafeInteger(p.number)||p.number<0)))
+            throw new Error('Notion lower-bound value must be null or non-negative integer');
+          var before=p.number;
+          if(before!==null&&before>=after)continue;
+          staged.push({notionId:page.id,spId:linked.id,before:before,after:after,ids:ids,
+            title:textValue(taskProperty(page,c,'titleProp'))});
+        }catch(e){skipped.push(page.id+': '+String(e&&e.message||e).slice(0,120));}
+      }
+      stagedObservedPomo={sourceId:sourceId,config:JSON.stringify(c),
+        selection:selected.map(function(p){return p.id;}).sort().join(','),
+        updates:staged};
+      ui('observedPomoPlan').textContent=
+        'PARTIAL OBSERVER MINIMUM — NOT HISTORICAL COMPLETED POMODOROS\\n'+
+        staged.length+' reviewed, monotonic updates (not applied).\\n'+
+        staged.map(function(e){return e.title+' ['+e.notionId+'] '+e.before+
+          ' → '+e.after+' unique observed automatic Pomodoros';}).join('\\n')+
+        '\\nObserver keys: '+ledger.indexed+'; nonqualifying/invalid: '+ledger.rejected+
+        (skipped.length?'\\nSkipped:\\n'+skipped.join('\\n'):'')+
+        '\\nNo Notion write or database/property creation.';
+      message('Observed minimum preview ready. Review then separately authorize any write.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function commitObservedPomodoros() {
+    if(active)return;
+    busy(true);
+    try {
+      if(!ui('authorizeObservedPomo').checked)
+        throw new Error('Explicitly authorize the reviewed partial observer-minimum writeback');
+      var c=getForm(),plan=stagedObservedPomo;
+      if(!plan||!plan.updates.length)
+        throw new Error('No eligible observed-minimum differences; stage them first');
+      var sourceId=dataSourceId(c.taskSource,false);
+      if(sourceId!==plan.sourceId||plan.config!==JSON.stringify(c)||
+          plan.config!==lastPreviewConfig)
+        throw new Error('Notion mapping changed: refresh task preview and observed count plan');
+      var selected=getSelectedPages().map(function(p){return p.id;}).sort().join(',');
+      if(selected!==plan.selection)
+        throw new Error('Notion task selection changed: restage reviewed counts');
+      if(!taskPropertyId(c,'observedPomoProp'))
+        throw new Error('Missing stable observed-minimum property ID');
+      var source=await notion('/data_sources/'+encodeURIComponent(sourceId));
+      var schema=source.properties||{},field=schemaTaskProperty(schema,c,'observedPomoProp');
+      if(!field||field.type!=='number'||propTypes(schema,c).length)
+        throw new Error('Notion source or pinned property changed: refuse writes');
+      var ledger=await readVerifiedObservedPomodoros();
+      var tasks=[].concat(await PluginAPI.getTasks()||[],await PluginAPI.getArchivedTasks()||[]);
+      var stats={written:0,skipped:0,notes:[]};
+      for(var entry of plan.updates) {
+        try {
+          var linked=await findLinkedSpTask(entry.notionId,tasks);
+          if(!linked||linked.id!==entry.spId) {
+            stats.skipped++;stats.notes.push('Task link changed: '+entry.notionId);continue;
+          }
+          if(observerIds(ledger,linked.id)!==entry.ids) {
+            stats.skipped++;stats.notes.push('Observer ledger changed: '+entry.notionId);continue;
+          }
+          var page=await notion('/pages/'+encodeURIComponent(entry.notionId));
+          if(!page||page.object!=='page'||page.in_trash||
+             normalizedUUID(page.parent&&page.parent.data_source_id)!==sourceId) {
+            stats.skipped++;stats.notes.push('Notion page moved/missing: '+entry.notionId);continue;
+          }
+          var allowed=splitValues(c.typeValues);
+          if(!typeValue(taskProperty(page,c,'typeProp')).some(function(t){return allowed.includes(t);})) {
+            stats.skipped++;stats.notes.push('Notion item type no longer allowed: '+entry.notionId);continue;
+          }
+          var p=taskProperty(page,c,'observedPomoProp');
+          if(!p||p.type!=='number'||!sameNumber(p.number,entry.before)) {
+            stats.skipped++;stats.notes.push('Notion count changed after review: '+entry.notionId);continue;
+          }
+          if(typeof p.number==='number'&&p.number>=entry.after) {
+            stats.skipped++;stats.notes.push('Notion already has a higher value: '+entry.notionId);continue;
+          }
+          var patch={properties:{}};
+          patch.properties[taskWriteKey(c,'observedPomoProp')]={number:entry.after};
+          var response=await notion('/pages/'+encodeURIComponent(entry.notionId),'PATCH',patch);
+          if(!response||response.object!=='page'||response.id!==entry.notionId)
+            throw new Error('Notion did not confirm update; restage before retrying');
+          stats.written++;
+          var cached=lastVisibleRows.find(function(x){return x.id===entry.notionId;});
+          if(cached&&taskProperty(cached,c,'observedPomoProp'))
+            taskProperty(cached,c,'observedPomoProp').number=entry.after;
+        }catch(e){stats.skipped++;stats.notes.push(entry.notionId+': '+String(e&&e.message||e).slice(0,130));}
+      }
+      ui('observedPomoReport').textContent='Updated '+stats.written+
+        ' existing partial observed-minimum Number fields; skipped '+stats.skipped+
+        '. This is NOT the total completed Pomodoros. '+
+        stats.notes.slice(0,10).join('; ');
+      ui('authorizeObservedPomo').checked=false;
+      stagedObservedPomo=null;
+      ui('observedPomoPlan').textContent='Write attempted. Re-run preview and stage before any retry.';
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
   var HABIT_KEY_PREFIX='alf-habit-definition-link-v1-';
   function habitLocalDay() {
     var d=new Date();
