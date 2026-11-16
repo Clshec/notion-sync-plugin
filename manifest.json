@@ -1,10 +1,10 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
-  "description": "Notion-first configurable read preview and explicitly authorized task import to Super Productivity (alpha)",
+  "description": "Notion-first task import and explicitly authorized tracked-time writeback (experimental alpha)",
   "author": "Alf contributors; original Notion Sync Plugin by Alessio Lovato",
   "icon": "notion.svg",
   "iFrame": true,
@@ -35,7 +35,8 @@
       ],
       "data": [
         "credentials",
-        "ids"
+        "ids",
+        "timeTracked"
       ]
     }
   ],
