@@ -8,18 +8,18 @@
 |---|---|---|---|
 | L1 | Node.js synthetic mocked Notion/SP API | Contract/regression tests; no real user data | CI active |
 | L2 | SP v20.0.0 executable with a **disposable** `--user-data-dir` | Verify safe isolated host startup | **Passed** on connected Windows PC; test profile deleted |
-| L3 | SP v20.0.0 disposable profile + real plugin ZIP | Install/activate, iframe/host bridge, UI and onReady/onUnload behavior | **Not tested** |
+| L3 | SP v20.0.0 disposable profile + real plugin ZIP | Install/activate and open iframe UI; host hooks and API side effects require follow-up verification | **Partially passed**: actual ZIP installed and Notion sidebar opened; no token or network verification |
 | L4 | Disposable Notion integration and existing disposable data-source rows | Real Notion schema/GET/PATCH/mapping/permissions, test restore | **Not tested** |
 | L5 | Android + Windows, SuperSync Beta, foreground/background/offline | Concurrency, mobile timers and per-device secrets | **Not tested** |
 
-Passing L1/L2 **does not** imply production readiness or historical completed-Pomodoro accuracy. Never connect a production Notion token or the user's original SP profile until L3–L5 pass. Do not provide or log real Notion tokens.
+Passing L1–L3 (including this partial isolated Windows install smoke) **does not** imply production readiness or historical completed-Pomodoro accuracy. Never connect a production Notion token or the user's original SP profile until L3–L5 pass. Do not provide or log real Notion tokens.
 
 ## Read-only preflight (L3)
 
 1. Verify the SP binary/active host version is **20.0.0+**, which supports the public plugin methods used (`onReady`, `onUnload`, `getTasks`, `getArchivedTasks`, `updateTask`, `getAppState`, `getDayContext`, `getSecret`, `setSecret`, `listSyncedDataKeys`, `persistDataSynced` and guarded `request`).
 2. Start a fresh *disposable* Windows profile using the upstream-supported `--user-data-dir` argument. Never select the real default profile, or reuse its local SuperSync credentials. Check it creates a separate data directory. After closing that exact process, remove only the confirmed disposable temporary folder.
-3. Install the reviewed plugin package (root `manifest.json`, `plugin.js`, `index.html`, `notion.svg`, original MIT license) under **Settings → Plugins → Choose Plugin File** in the disposable profile; inspect manifest host permissions and the console for errors. No package is published by this plan.
-4. With all three automatic modes disabled (default), verify no HTTP request to Notion, no task mutation, no synced metadata churn; verify the header/side panel opens.
+3. Install the reviewed plugin package (root `manifest.json`, `plugin.js`, `index.html`, `notion.svg`, original MIT license) under **Settings → Plugins → Choose Plugin File** in the disposable profile; inspect manifest host permissions and the console for errors. **Verified manually:** v0.22.0 ZIP was accepted, uploaded plugin listed with correct name/version/author/icon/15 permissions/2 hooks, header Notion icon appeared, and the actual iframe side panel opened. **Not yet verified:** detailed console errors, internal hooks, credentials, Notion HTTP or state across SP restart. No release ZIP was published; temporary ZIP/profile were removed.
+4. With all three automatic modes disabled (default), verify no HTTP request to Notion, no task mutation, no synced metadata churn; verify the header/side panel opens. **Side panel opening passed**; absence of network/side effects still requires instrumented host verification.
 5. Verify per-device Notion credential storage: credentials do not appear in synced plugin metadata, diagnostic summaries, logs or remote SuperSync exports. Importing plugin on Android does not automatically bring a Windows token.
 
 ## Disposable Notion setup (L4)
@@ -70,4 +70,4 @@ Enable **one device only** for test writes. Observe its local-only diagnostic sc
 
 **Do not declare production-ready** until L3–L5 have passed on disposable data, the historical security note in `SECURITY.md` is addressed (including revoking any historically exposed Notion token), and the user has accepted an explicit policy for the unresolved multi-device write lock and future missing habit-day row creation. Do not silently add Notion fields, modify personal pages or alter SuperSync settings. The expected failure mode is *skip + visible conflict*, never a guessed write. CI alone certifies only L1.
 
-_Last updated: 2026-11-16. Version: v0.21 experimental acceptance plan._
+_Last updated: 2026-11-16. Version: v0.23 experimental acceptance plan (partial L3 passed)._
