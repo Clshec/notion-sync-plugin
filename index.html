@@ -1,70 +1,323 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>Alf Notion Super Productivity — Foundation</title>
-  <style>
-    :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color-scheme: light dark; }
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 18px; background: Canvas; color: CanvasText; line-height: 1.55; }
-    main { max-width: 740px; margin: 0 auto; }
-    header { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
-    .brand { display: grid; place-items: center; background: #164a35; color: #fff; border-radius: 11px; width: 48px; height: 48px; font-size: 21px; font-weight: 750; flex: none; }
-    h1 { margin: 0; line-height: 1.2; font-size: 1.5rem; }
-    .subtitle { margin: 4px 0 0; color: GrayText; font-size: .95rem; }
-    section { border: 1px solid #9996; border-radius: 12px; padding: 15px 18px; margin-bottom: 14px; }
-    h2 { margin: 0 0 8px; font-size: 1.05rem; }
-    p { margin: 8px 0; }
-    .status { display: inline-block; padding: 4px 9px; border: 1px solid #b48535; border-radius: 7px; font-weight: 650; font-size: .85rem; }
-    .muted { color: GrayText; }
-    a { color: LinkText; }
-    li { margin: 5px 0; }
-    .note { font-size: .89rem; }
-    code { background: #8882; border-radius: 3px; padding: 1px 4px; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Alf Notion Super Productivity</title>
+<style>
+:root {font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:light dark}
+* {box-sizing:border-box}
+body {margin:0;padding:16px;background:Canvas;color:CanvasText;line-height:1.45}
+main {max-width:980px;margin:auto}
+header {display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.logo {background:#124e39;color:white;border-radius:11px;padding:11px;font-weight:750;font-size:19px}
+h1 {font-size:1.35rem;margin:0}h2 {font-size:1rem;margin:0 0 12px}
+p {margin:6px 0 12px}.muted,small {color:GrayText}
+section {border:1px solid #8886;padding:15px;border-radius:12px;margin-bottom:13px}
+.grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:11px}
+label {display:flex;flex-direction:column;gap:4px;font-size:.89rem;font-weight:600}
+input,select,button {font:inherit;min-width:0;border-radius:7px;padding:9px 10px}
+input,select {background:Field;color:FieldText;border:1px solid #8888;width:100%}
+button {cursor:pointer;border:1px solid #8888;background:ButtonFace;color:ButtonText}
+button.primary {background:#13724b;color:white;border-color:#13724b}
+button:disabled {opacity:.6;cursor:wait}
+.actions {display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.status {display:inline-block;border-radius:6px;padding:4px 8px;border:1px solid #c99c57;font-size:.82rem;font-weight:700}
+.status.safe {border-color:#259167;color:#259167}
+#notice {white-space:pre-line;word-break:break-word;border-radius:8px;background:#8881;padding:9px 11px;margin-top:11px}
+#notice[hidden] {display:none}
+#schema {white-space:pre-wrap;overflow:auto;max-height:210px;font-size:.8rem}
+.table-wrap {overflow:auto}
+table {border-collapse:collapse;min-width:770px;width:100%;font-size:.85rem}
+th,td {padding:7px 9px;border-bottom:1px solid #8884;text-align:left;vertical-align:top}
+th {font-weight:700}
+footer {font-size:.8rem;color:GrayText;padding-bottom:22px}
+code {font:inherit;white-space:nowrap}
+</style>
 </head>
 <body>
 <main>
-  <header>
-    <div class="brand" aria-hidden="true">ألف</div>
-    <div>
-      <h1>Alf Notion Super Productivity</h1>
-      <p class="subtitle">Notion plans. Super Productivity executes.</p>
-    </div>
-  </header>
-
-  <section aria-labelledby="status-title">
-    <h2 id="status-title">Development foundation</h2>
-    <p><span class="status" role="status">Notion synchronization disabled</span></p>
-    <p>This preview deliberately does not connect to Notion, request credentials, or write data.
-      The inherited alpha sync engine is unsafe for general-purpose Notion databases.
-      A configurable, non-destructive replacement is being developed.</p>
-    <p class="muted note">Your existing Notion workspace and Super Productivity / SuperSync data are not changed by this preview.</p>
-  </section>
-
-  <section aria-labelledby="goals-title">
-    <h2 id="goals-title">What the integration will support</h2>
-    <ul>
-      <li><strong>Existing Notion databases:</strong> configurable project, task, bundle and habit mappings without creating new databases.</li>
-      <li><strong>Quick planning fields:</strong> schedule day/time, separate deadline, estimate, completion status and priority.</li>
-      <li><strong>Time tracking:</strong> verified actual time flowing from Super Productivity to Notion.</li>
-      <li><strong>Pomodoro, Flowtime and Countdown:</strong> real completed session counts after a reliable session API is available.</li>
-      <li><strong>Habits:</strong> daily counters, streaks and original Notion habit definitions.</li>
-      <li><strong>Offline-first:</strong> desktop and Android execution with conflict-safe syncing.</li>
-    </ul>
-  </section>
-
-  <section aria-labelledby="links-title">
-    <h2 id="links-title">Source and design</h2>
-    <p><a href="https://github.com/Clshec/notion-sync-plugin">GitHub repository</a> ·
-      <a href="https://github.com/Clshec/notion-sync-plugin/blob/feat/alf-notion-foundation/docs/architecture/alf-sync.md">Architecture</a> ·
-      <a href="https://github.com/Clshec/notion-sync-plugin/blob/feat/alf-notion-foundation/docs/architecture/field-mapping.md">Field mapping</a> ·
-      <a href="https://github.com/Clshec/notion-sync-plugin/blob/feat/alf-notion-foundation/SECURITY.md">Security</a>
-    </p>
-    <p class="muted note">MIT-licensed fork of <a href="https://github.com/AlessioLovato/notion-sync-plugin">Alessio Lovato's Notion Sync Plugin</a>.</p>
-  </section>
+<header><span class="logo">ألف</span><div><h1>Alf Notion Super Productivity</h1><small>Notion plans · Super Productivity executes · Windows + Android</small></div></header>
+<section>
+  <strong class="status safe">READ-ONLY PREVIEW</strong>
+  <p>This alpha only reads existing Notion data sources and local Super Productivity tasks. No database, page, task, or habit is created, updated or deleted. It does not touch SuperSync or run background synchronization.</p>
+</section>
+<section>
+  <h2>1. Connect your existing Notion data sources</h2>
+  <div class="grid">
+    <label>Notion integration token (this device only)
+      <input id="token" type="password" autocomplete="off" placeholder="Paste token only on your own device">
+    </label>
+    <label>Tasks data source ID (required)
+      <input id="taskSource" spellcheck="false" placeholder="UUID of an existing Notion data source">
+    </label>
+    <label>Projects data source ID (optional, future phase)
+      <input id="projectSource" spellcheck="false" placeholder="Existing project source UUID">
+    </label>
+    <label>Habits data source ID (optional, future phase)
+      <input id="habitSource" spellcheck="false" placeholder="Existing habit definition source UUID">
+    </label>
+  </div>
+  <p class="muted"><small>Use the <strong>data source ID</strong>, not the parent database ID. The token is stored per device through the Super Productivity local secret API, never in synced settings. Super Productivity's local secret storage is not hardware-encrypted. Your Notion integration must be shared with the selected existing data sources.</small></p>
+  <div class="actions">
+    <button id="save" class="primary">Save settings (local token; synced mapping)</button>
+    <button id="disconnect">Forget token on this device</button>
+  </div>
+</section>
+<section>
+  <h2>2. Map properties already present in Notion</h2>
+  <p class="muted"><small>Property names are configurable and case-sensitive. Fill in only fields that exist. This form never adds properties or new databases.</small></p>
+  <div class="grid">
+    <label>Task title property (Title) <input id="titleProp" placeholder="e.g. Name / المصدر"></label>
+    <label>Item type property (Multi-select or Select) <input id="typeProp" placeholder="e.g. Item Type / نوع الصفحة"></label>
+    <label>Allowed task/bundle type values (comma separated) <input id="typeValues" placeholder="e.g. Task, Bundle / مهمة, حزمة"></label>
+    <label>Execution day property (Date) <input id="executionProp" placeholder="e.g. Execution Day / يوم التنفيذ"></label>
+    <label>Deadline property (Date, optional) <input id="deadlineProp" placeholder="e.g. Deadline"></label>
+    <label>Estimated time property (Number) <input id="estimateProp" placeholder="e.g. Planned Time / الوقت المخطط له"></label>
+    <label>Actual tracked time property (Number) <input id="actualProp" placeholder="e.g. Actual Time / الوقت الفعلي"></label>
+    <label>Status property (Status or Select) <input id="statusProp" placeholder="e.g. Status"></label>
+    <label>Project relation property (optional) <input id="projectProp" placeholder="e.g. Project / العنصر الفرعي"></label>
+    <label>Bundle parent relation property (optional) <input id="parentProp" placeholder="e.g. Parent Task / الحزمة الأب"></label>
+    <label>Time unit for Notion number properties
+      <select id="unit"><option value="hours">Hours</option><option value="minutes">Minutes</option></select>
+    </label>
+  </div>
+  <div class="actions">
+    <button id="schemaBtn">Inspect existing data source schema</button>
+    <button id="previewBtn" class="primary">Preview matching tasks (NO WRITES)</button>
+  </div>
+  <div id="notice" role="status" aria-live="polite" hidden></div>
+  <pre id="schema"></pre>
+</section>
+<section>
+  <h2>3. Preview results</h2>
+  <p id="summary" class="muted">No query has been made yet.</p>
+  <div class="table-wrap">
+    <table><thead><tr><th>Notion task</th><th>Type</th><th>Execution day</th><th>Deadline</th><th>Estimate</th><th>Actual</th><th>Status</th></tr></thead><tbody id="results"></tbody></table>
+  </div>
+</section>
+<footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release does not synchronize any changes.</footer>
 </main>
+<script>
+(function () {
+  'use strict';
+  var CFG_KEY = 'alf-mapping-v2';
+  var TOKEN_KEY = 'alf-notion-token';
+  var API_VERSION = '2026-03-11';
+  var MAX_PAGES = 300; // deliberate preview limit, not an import limit
+  var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
+    'executionProp','deadlineProp','estimateProp','actualProp','statusProp','projectProp','parentProp','unit'];
+  var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
+    deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],
+    statusProp:['status','select'],projectProp:['relation'],parentProp:['relation']};
+  var ui = function (id) { return document.getElementById(id); };
+  var active = false;
+
+  function message(text, isError) {
+    ui('notice').hidden = false;
+    ui('notice').textContent = text;
+    ui('notice').style.border = isError ? '1px solid #a94442' : '1px solid #249167';
+  }
+  function fail(error) {
+    // No raw HTTP response headers or request body (which can include credentials).
+    var hint = String(error && error.message || error || 'Unknown error');
+    hint = hint.replace(/(?:ntn_|secret_)[A-Za-z0-9_-]+/ig, '[redacted]').slice(0, 220);
+    message('Operation failed. Check the Notion integration permission, data source ID and API version. ' + hint, true);
+  }
+  function busy(value) {
+    active = value;
+    ['save','disconnect','schemaBtn','previewBtn'].forEach(function (id) { ui(id).disabled = value; });
+  }
+  function getForm() {
+    var c = {version:2};
+    INPUTS.forEach(function (id) { c[id] = String(ui(id).value || '').trim(); });
+    return c;
+  }
+  function putForm(c) {
+    INPUTS.forEach(function (id) { if (typeof c[id] === 'string') ui(id).value = c[id]; });
+  }
+  function dataSourceId(value, optional) {
+    var v = String(value || '').trim();
+    if (!v && optional) return '';
+    // Notion API IDs are stable UUIDs, accept compact or dashed format.
+    if (!/^[a-f0-9]{32}$/i.test(v.replace(/-/g,''))) throw new Error('Data source must be a Notion UUID, not a database URL');
+    return v.replace(/-/g,'').toLowerCase();
+  }
+  async function notion(path, method, body) {
+    if (typeof PluginAPI.request !== 'function') throw new Error('Update Super Productivity: HTTP plugin bridge unavailable');
+    var token = await PluginAPI.getSecret(TOKEN_KEY);
+    if (!token) throw new Error('Save a Notion integration token on this device first');
+    var opts = {
+      method: method || 'GET',
+      headers: {
+        'Authorization':'Bearer ' + token,
+        'Notion-Version': API_VERSION,
+        'Content-Type':'application/json'
+      },
+      timeout: 30000,
+      responseType: 'json'
+    };
+    if (body !== undefined) opts.body = body;
+    return await PluginAPI.request('https://api.notion.com/v1' + path, opts);
+  }
+  async function save() {
+    if (active) return;
+    busy(true);
+    try {
+      var c = getForm();
+      c.taskSource = dataSourceId(c.taskSource, true);
+      c.projectSource = dataSourceId(c.projectSource, true);
+      c.habitSource = dataSourceId(c.habitSource, true);
+      // No credentials in synchronized data; retained local token is independent.
+      if (ui('token').value.trim()) {
+        await PluginAPI.setSecret(TOKEN_KEY, ui('token').value.trim());
+        ui('token').value = '';
+      }
+      await PluginAPI.persistDataSynced(JSON.stringify(c), CFG_KEY);
+      message('Settings saved. Only mapping metadata is synced. Token remains local on this device. No Notion/SP changes were made.');
+    } catch (e) { fail(e); }
+    finally { busy(false); }
+  }
+  async function disconnect() {
+    if (active) return;
+    busy(true);
+    try {
+      await PluginAPI.deleteSecret(TOKEN_KEY);
+      ui('token').value = '';
+      message('Local Notion token forgotten on this device. Synced mapping configuration was preserved.');
+    } catch (e) { fail(e); }
+    finally { busy(false); }
+  }
+  function propTypes(schema, config) {
+    var errors = [];
+    Object.keys(FIELDS).forEach(function (key) {
+      var name = config[key];
+      if (!name) return;
+      var prop = schema[name];
+      if (!prop) errors.push(key + ': "' + name + '" is not in the existing data source');
+      else if (FIELDS[key].indexOf(prop.type) === -1)
+        errors.push(key + ': "' + name + '" has type ' + prop.type + ' (expected ' + FIELDS[key].join('/') + ')');
+    });
+    return errors;
+  }
+  function textValue(property) {
+    if (!property || !Array.isArray(property.title)) return '';
+    return property.title.map(function (t) { return t.plain_text || (t.text && t.text.content) || ''; }).join('');
+  }
+  function typeValue(property) {
+    if (!property) return [];
+    if (property.type === 'multi_select') return (property.multi_select || []).map(function (x) { return x.name; });
+    if (property.type === 'select' && property.select) return [property.select.name];
+    return [];
+  }
+  function dateValue(property) {
+    if (!property || !property.date) return '';
+    return String(property.date.start || '') + (property.date.end ? ' – ' + property.date.end : '');
+  }
+  function numberValue(property, unit) {
+    if (!property || typeof property.number !== 'number') return '';
+    return String(property.number) + ' ' + unit;
+  }
+  function statusValue(property) {
+    if (!property) return '';
+    return (property.status && property.status.name) || (property.select && property.select.name) || '';
+  }
+  function appendCell(row, value) {
+    var cell = document.createElement('td');
+    cell.textContent = value;
+    row.appendChild(cell);
+  }
+  async function inspect() {
+    if (active) return;
+    busy(true);
+    try {
+      var c = getForm();
+      var id = dataSourceId(c.taskSource, false);
+      var source = await notion('/data_sources/' + encodeURIComponent(id));
+      var schema = source.properties || {};
+      var list = Object.keys(schema).sort().map(function (k) { return k + ' — ' + schema[k].type; });
+      ui('schema').textContent = 'Existing properties (' + list.length + '):\n' + list.join('\n');
+      var mismatches = propTypes(schema,c);
+      message(mismatches.length ? 'Mapping warnings:\n' + mismatches.join('\n') : 'Schema retrieved. No Notion data was modified.', mismatches.length > 0);
+    } catch(e) { fail(e); }
+    finally { busy(false); }
+  }
+  async function preview() {
+    if (active) return;
+    busy(true);
+    try {
+      var c = getForm();
+      var id = dataSourceId(c.taskSource,false);
+      var allowed = String(c.typeValues||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
+      if (!c.titleProp || !c.typeProp || allowed.length === 0) {
+        throw new Error('Set a title property, an item type property, and at least one explicitly allowed item type');
+      }
+      var source = await notion('/data_sources/' + encodeURIComponent(id));
+      var schema = source.properties || {};
+      var mismatches = propTypes(schema,c);
+      if (mismatches.length) throw new Error('Fix mapping: ' + mismatches.join('; '));
+      var all=[],cursor, truncated=false;
+      do {
+        var body={page_size:Math.min(100,MAX_PAGES-all.length)};
+        if (cursor) body.start_cursor=cursor;
+        var page=await notion('/data_sources/'+encodeURIComponent(id)+'/query','POST',body);
+        if (!page || !Array.isArray(page.results)) throw new Error('Unexpected Notion query response');
+        all=all.concat(page.results);
+        cursor=page.has_more ? page.next_cursor : null;
+        if (all.length>=MAX_PAGES) {truncated=!!cursor;break;}
+      } while (cursor);
+      var rows=all.filter(function (page) {
+        if (!page || page.object!=='page' || page.in_trash===true) return false;
+        var types=typeValue((page.properties||{})[c.typeProp]);
+        return types.some(function(t){return allowed.indexOf(t)>=0;});
+      });
+      var tasks=await PluginAPI.getTasks();
+      var tbody=ui('results');
+      tbody.replaceChildren();
+      rows.slice(0,75).forEach(function(page){
+        var p=page.properties||{}, tr=document.createElement('tr');
+        appendCell(tr,textValue(p[c.titleProp]));
+        appendCell(tr,typeValue(p[c.typeProp]).join(', '));
+        appendCell(tr,dateValue(p[c.executionProp]));
+        appendCell(tr,dateValue(p[c.deadlineProp]));
+        appendCell(tr,numberValue(p[c.estimateProp],c.unit));
+        appendCell(tr,numberValue(p[c.actualProp],c.unit));
+        appendCell(tr,statusValue(p[c.statusProp]));
+        tbody.appendChild(tr);
+      });
+      ui('summary').textContent='Read '+all.length+' Notion pages; '+rows.length+
+        ' matched configured task types. Displaying first '+Math.min(rows.length,75)+
+        '. Local SP active tasks: '+(Array.isArray(tasks)?tasks.length:0)+'.'+
+        (truncated?' Preview capped at '+MAX_PAGES+' pages; data source has more.':'')+
+        ' No data written.';
+      message('Read-only preview finished. No Notion pages, Super Productivity tasks or habits were modified.');
+    } catch(e) { fail(e); }
+    finally {busy(false);}
+  }
+  async function init() {
+    try {
+      var saved=await PluginAPI.loadSyncedData(CFG_KEY);
+      if (saved) {
+        var c=JSON.parse(saved);
+        if (c && c.version===2) putForm(c);
+      }
+      var local=await PluginAPI.getSecret(TOKEN_KEY);
+      message(local?'Local Notion credential is present on this device. Preview remains read-only.':
+        'No local Notion credential found. Save a token to inspect your data source.');
+    } catch(e) { fail(e); }
+    ui('save').addEventListener('click',save);
+    ui('disconnect').addEventListener('click',disconnect);
+    ui('schemaBtn').addEventListener('click',inspect);
+    ui('previewBtn').addEventListener('click',preview);
+  }
+  function boot() {
+    if (!window.PluginAPI) {setTimeout(boot,100);return;}
+    if (typeof PluginAPI.onReady==='function') PluginAPI.onReady(init);
+    else init();
+  }
+  boot();
+})();
+</script>
 </body>
 </html>

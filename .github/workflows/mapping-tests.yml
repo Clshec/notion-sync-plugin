@@ -23,5 +23,6 @@ jobs:
           node --check lib/field-mapping.cjs
           node --check test/field-mapping.test.cjs
           node --check plugin.js
+          node --check test/preview-ui.test.cjs
       - name: Run mapping tests
-        run: node --test test/field-mapping.test.cjs
+        run: node --test test/*.test.cjs

@@ -1,32 +1,40 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "manifestVersion": 1,
-  "minSupVersion": "14.0.0",
-  "description": "Notion-first local execution integration for Super Productivity: planning, focus sessions, habits and tasks (alpha foundation)",
-  "author": "Alf contributors (original Notion Sync Plugin by Alessio Lovato)",
+  "minSupVersion": "20.0.0",
+  "description": "Notion-first Super Productivity integration: configurable, read-only Notion task preview (alpha)",
+  "author": "Alf contributors; original Notion Sync Plugin by Alessio Lovato",
   "icon": "notion.svg",
   "iFrame": true,
   "sidePanel": true,
   "permissions": [
+    "http",
     "getTasks",
-    "getArchivedTasks",
-    "updateTask",
-    "addTask",
     "getAllProjects",
-    "addProject",
-    "getAllTags",
-    "addTag",
-    "showSnack",
-    "openDialog",
     "persistDataSynced",
-    "loadSyncedData"
+    "loadSyncedData",
+    "setSecret",
+    "getSecret",
+    "deleteSecret",
+    "showSnack",
+    "showIndexHtmlAsView"
   ],
-  "hooks": [
-    "taskComplete",
-    "taskUpdate",
-    "taskDelete",
-    "currentTaskChange"
-  ]
+  "allowedHosts": [
+    "api.notion.com"
+  ],
+  "dataSharing": [
+    {
+      "recipient": "Notion",
+      "hosts": [
+        "api.notion.com"
+      ],
+      "data": [
+        "credentials",
+        "ids"
+      ]
+    }
+  ],
+  "hooks": []
 }
