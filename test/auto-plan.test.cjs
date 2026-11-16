@@ -74,6 +74,7 @@ function fixture() {
     async listSyncedDataKeys(prefix){return [...stored.keys()].filter(k=>k.startsWith(prefix));},
     async persistDataSynced(json,key){writes.push({key,json});stored.set(key,json);},
     async getSecret(key){return secrets.get(key)||null;},
+    async setSecret(k,v){secrets.set(k,v);},
     async getTasks(){return tasks;},async getArchivedTasks(){return [];},
     async updateTask(id,fields,options){
       assert.ok(options.isIgnoreShortSyntax);
