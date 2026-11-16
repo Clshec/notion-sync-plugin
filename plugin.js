@@ -5,6 +5,122 @@
 // Original MIT copyright remains in LICENSE (Alessio Lovato).
 'use strict';
 
+// SP 20.0.0 deliberately filters setSecret/getSecret/deleteSecret out of the
+// iframe API. This small same-plugin message bridge invokes the OFFICIAL
+// host-side PluginAPI instead. The credential never enters synced metadata,
+// and saved token values are never returned to the iframe.
+const ALF_HOST_RPC_CHANNEL = 'alf-notion-host-rpc-v1';
+const ALF_OWN_IFRAME_MARKER =
+  '<meta name="alf-plugin-owner" content="alf-notion-super-productivity">';
+const ALF_LOCAL_RPC_KEY_RE =
+  /^alf-(?:notion-token|auto-plan-local-enabled-v1|auto-time-local-enabled-v1|auto-habit-local-enabled-v1|auto-habit-local-scope-v1|auto-status-local-v1-(?:planning|time|habits))$/;
+
+function alfHostRpcOwnsSource(source, doc) {
+  if (!source || !doc || typeof doc.querySelectorAll !== 'function') return false;
+  return Array.from(doc.querySelectorAll('iframe')).some((frame) =>
+    frame.contentWindow === source &&
+    typeof frame.srcdoc === 'string' &&
+    frame.srcdoc.includes(ALF_OWN_IFRAME_MARKER));
+}
+
+function alfHostNotionMethodAllowed(path, method, body) {
+  if (typeof path !== 'string' || path.length > 180) return false;
+  const source = /^\/data_sources\/[a-f0-9-]{32,36}$/i.test(path);
+  const dayQuery = /^\/data_sources\/[a-f0-9-]{32,36}\/query$/i.test(path);
+  const page = /^\/pages\/[a-f0-9-]{32,36}$/i.test(path);
+  if (method === 'GET') return (source || page) && body === undefined;
+  if (method === 'POST') return dayQuery && body && typeof body === 'object';
+  if (method !== 'PATCH' || !page || !body || typeof body !== 'object') return false;
+  // Alf only updates exactly one existing Number or Status/Select property
+  // after a separate reviewed UI action, never arbitrary Notion page content.
+  const props = body.properties;
+  if (!props || typeof props !== 'object' || Object.keys(props).length !== 1 ||
+      Object.keys(body).some((key) => key !== 'properties')) return false;
+  const value = props[Object.keys(props)[0]];
+  return !!value && typeof value === 'object' && (
+    (Object.keys(value).length === 1 && typeof value.number === 'number' &&
+      Number.isFinite(value.number)) ||
+    (Object.keys(value).length === 1 && value.status &&
+      typeof value.status.name === 'string') ||
+    (Object.keys(value).length === 1 && value.select &&
+      typeof value.select.name === 'string')
+  );
+}
+
+function alfCreateHostRpcHandler(api, doc) {
+  return async function onAlfIframeMessage(event) {
+    const req = event && event.data;
+    if (!req || req.channel !== ALF_HOST_RPC_CHANNEL ||
+        req.type !== 'request' || typeof req.id !== 'string' ||
+        req.id.length > 120 ||
+        !alfHostRpcOwnsSource(event.source, doc)) return;
+    const args = req.args && typeof req.args === 'object' ? req.args : {};
+    let value, error = null;
+    try {
+      if (['getSecret', 'setSecret', 'deleteSecret'].includes(req.op)) {
+        if (typeof args.key !== 'string' ||
+            !ALF_LOCAL_RPC_KEY_RE.test(args.key))
+          throw new Error('Unsupported Alf local key');
+        if (req.op === 'getSecret') {
+          const stored = await api.getSecret(args.key);
+          // No saved Notion integration token is ever sent back into HTML.
+          value = args.key === 'alf-notion-token' ?
+            (stored ? 'configured' : null) : stored;
+        } else if (req.op === 'setSecret') {
+          if (typeof args.value !== 'string' || !args.value ||
+              args.value.length > 8192)
+            throw new Error('Invalid local secret value');
+          await api.setSecret(args.key, args.value);
+          value = true;
+        } else {
+          await api.deleteSecret(args.key);
+          value = true;
+        }
+      } else if (req.op === 'notion') {
+        const method = args.method || 'GET';
+        if (!alfHostNotionMethodAllowed(args.path, method, args.body))
+          throw new Error('Notion request outside Alf approved paths');
+        const token = await api.getSecret('alf-notion-token');
+        if (!token) throw new Error('Save a local Notion token first');
+        const opts = {method,headers:{
+          Authorization:'Bearer '+token,
+          'Notion-Version':'2026-03-11',
+          'Content-Type':'application/json'
+        },timeout:30000,responseType:'json'};
+        if (args.body !== undefined) opts.body = args.body;
+        value = await api.request('https://api.notion.com/v1'+args.path,opts);
+      } else {
+        throw new Error('Unsupported Alf RPC operation');
+      }
+    } catch (e) {
+      const status = Number(e && (e.status || e.statusCode ||
+        (e.response && e.response.status)));
+      // Never return a raw HTTP error body, Authorization header or token.
+      error = Number.isInteger(status) && status >= 400 && status <= 599 ?
+        'Notion HTTP '+status+' (verify integration permissions/source)' :
+        (String(e && e.message || '').startsWith('Notion request outside') ||
+         String(e && e.message || '').startsWith('Save a local Notion') ||
+         String(e && e.message || '').startsWith('Unsupported Alf') ||
+         String(e && e.message || '').startsWith('Invalid local secret') ?
+          String(e.message) : 'Alf local operation failed; check Notion/API connectivity');
+    }
+    try {
+      event.source.postMessage({
+        channel:ALF_HOST_RPC_CHANNEL,type:'response',id:req.id,
+        ok:error===null,value:error===null?value:null,error
+      },'*');
+    } catch (_) { /* iframe navigated away; no credentials logged */ }
+  };
+}
+
+function alfStartHostRpcBridge(api) {
+  if (typeof window === 'undefined' || typeof document === 'undefined' ||
+      typeof window.addEventListener !== 'function') return () => {};
+  const handler = alfCreateHostRpcHandler(api,document);
+  window.addEventListener('message',handler);
+  return () => window.removeEventListener('message',handler);
+}
+
 const ALF_FOCUS_KEY_PREFIX = 'alf-focus-observed-v1-';
 const ALF_FOCUS_MODES = ['Pomodoro', 'Flowtime', 'Countdown'];
 const ALF_ACTIONS = {
@@ -156,6 +272,7 @@ function alfCreateFocusObserver(api, options) {
 }
 
 if (typeof PluginAPI !== 'undefined') {
+  const alfStopHostRpcBridge = alfStartHostRpcBridge(PluginAPI);
   PluginAPI.registerHeaderButton({
     label: 'Alf Notion',
     icon: 'view_list',
@@ -1042,6 +1159,7 @@ if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
   });
   if(typeof PluginAPI.onUnload==='function')
     PluginAPI.onUnload(()=>{
+      if(typeof alfStopHostRpcBridge==='function')alfStopHostRpcBridge();
       alfAutomaticPlan.stop();
       alfAutomaticTime.stop();
       alfAutomaticHabits.stop();

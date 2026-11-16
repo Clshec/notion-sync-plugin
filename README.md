@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.28 experimental Notion-first integration: three separately opted-in automatic paths (linked SP task planning pull, monotonic tracked actual time, explicitly approved existing habit-day numeric counts), reviewed manual task import and a NEW separately reviewed, manually authorized existing habit-day Status update for boards without a habit count Number. All automatic modes are OFF by default. This is not full or cross-device-safe bidirectional sync. Windows SP 20.0.0 isolated profile ZIP installation and plugin side-panel opening passed for an older build; live Notion plugin writes and Android integration remain untested. Do not connect production Notion data yet.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.29 experimental Notion-first integration: three separately opted-in automatic paths (linked SP task planning pull, monotonic tracked actual time, explicitly approved existing habit-day numeric counts), reviewed manual task import and a separately reviewed, manually authorized existing habit-day Status update for boards without a habit count Number. All automatic modes are OFF by default. This is not full or cross-device-safe bidirectional sync. Windows SP 20.0.0 install/iframe smoke passed on v0.28; live Notion plugin writes and Android integration remain untested. Do not enable production writeback yet.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -9,6 +9,14 @@
 There must be **no requirement to create new Notion databases**. Existing properties can be mapped to SP fields through a future general configuration UI. Optional missing properties may be added only after user approval. The plugin must remain reusable by any Notion user, not tied to a particular workspace.
 
 ## Important safety notice
+
+### v0.29 — Fix for REAL SP 20.0.0 iframe secret API (integration blocker)
+
+The real desktop Super Productivity 20.0.0 iframe omits `PluginAPI.setSecret/getSecret/deleteSecret`, even though the **official host-side plugin.js** implements all three. This was confirmed by an actual main-profile, OFF-by-default settings-save attempt: it failed with `PluginAPI.setSecret is not a function`; no token was confirmed saved, and the password field was cleared. Earlier mocked L1 tests had concealed this boundary.
+
+v0.29 uses a narrowly scoped request/response bridge between the **same plugin's** iframe and its host-side `plugin.js`. Host checks the exact iframe `srcdoc` owner marker and `contentWindow`, only accepts this plugin's own local key names, and handles Notion GET, specific data-source POST queries, and single-field existing-page Number/Status PATCH through the official permissioned host HTTP API. The token is stored via host-side `PluginAPI.setSecret`; subsequent UI checks return **only a presence indicator**, never the token. The iframe never stores the credential in synced metadata, browser storage or project files. Separate reviewed write authorization and all three local automatic-mode OFF defaults remain unchanged. Other plugins are not a security boundary in SP: only install trusted plugins. No credentials have been committed to Git.
+
+Synthetic host bridge regression tests verify local-only credential writes, no token echo, refusal of unrelated iframe/key/methods and constrained Notion PATCH. Real host smoke and live read-only preflight are tracked independently; they do not imply production writeback safety.
 
 The inherited upstream alpha used fixed English property names and unsafe writes. This fork has **removed the old write engine** and replaced it with an opt-in read-only preview, but has not validated a production integration. It also does **not** provide accurate per-task completed Pomodoro session history via the official Plugin API.
 
