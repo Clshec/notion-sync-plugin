@@ -40,7 +40,8 @@ function mount(customRows) {
     'يوم التنفيذ': { type: 'date' },
     'الوقت المخطط له': { type: 'number' },
     'Status': { type: 'status' },
-    'الحزمة الأب': { type: 'relation' }
+    'الحزمة الأب': { type: 'relation' },
+    'Priority': { type: 'select' }
   };
   const api = {
     onReady(fn) { fn(); },
@@ -288,4 +289,31 @@ test('changing mapping after preview blocks the import until re-previewed', asyn
   await env.els('importBtn').events.click();
   assert.equal(env.imports.length,0);
   assert.match(env.els('notice').textContent,/Refresh read-only preview/);
+});
+
+
+test('import maps configured Done status and priority safely', async () => {
+  const rows=[{object:'page',id:'done-task',properties:{
+    'المصدر':{title:[{plain_text:'Finished test'}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'مهمة'}]},
+    'Status':{status:{name:'Done'}},
+    'Priority':{type:'select',select:{name:'High'}}
+  }}];
+  const env=mount(rows);
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('completedValues').value='Done, Completed';
+  env.els('priorityProp').value='Priority';
+  env.els('priorityHigh').value='High';
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  env.els('targetSpProject').value='projectX';
+  env.els('authorizeImport').checked=true;
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1);
+  assert.equal(env.imports[0].isDone,true);
+  assert.equal(env.updates.length,1);
+  assert.equal(env.updates[0].fields.priority,3);
 });
