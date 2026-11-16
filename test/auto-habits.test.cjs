@@ -59,6 +59,7 @@ function fixture(){
     registerHeaderButton(){},registerHook(){},showIndexHtmlAsView(){},
     Hooks:{ACTION:'action',CURRENT_TASK_CHANGE:'currentTaskChange'},
     async getSecret(k){return secrets.get(k)||null;},
+    async setSecret(k,v){secrets.set(k,v);},
     async loadSyncedData(k){return store.get(k)||null;},
     async listSyncedDataKeys(prefix){return [...store.keys()].filter(k=>k.startsWith(prefix));},
     async persistDataSynced(data,key){metadata.push({key,data});store.set(key,data);},
