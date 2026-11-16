@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.7 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.8 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,14 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.8: opt-in stable Notion task property IDs (rename-safe)
+
+The task/board mapping still accepts normal existing property labels, so old v0.7 configurations remain readable. After entering the existing source and fields, save settings, then click **Pin task property IDs (mapping only)** before renaming fields in Notion. This fetches only the existing Notion data source schema and stores each selected task field's immutable Notion property ID alongside its original label/source ID inside synced **nonsecret** mapping metadata (`alf-mapping-v2`). It neither creates a Notion property/database nor modifies SP tasks.
+
+Pinned IDs are used for task previews, selected bundle/subtask imports, execution day/deadline/estimate/status/priority, and the explicitly authorized Actual Time Number writeback. Notion page properties are looked up by the returned property `id`, even when Notion has changed the display key/name. Notion time PATCH uses the pinned property **ID**, not the renamed label, while still rechecking page identity, allowed item type, and the unchanged existing value.
+
+**Fail closed:** A pinned ID is valid only for the source ID and input label it was pinned with. If the field ID disappears or its type changes, operations stop rather than attaching to a different same-name field. To intentionally change a mapping, edit the input and pin again; always rerun the preview afterward. Notion API schema responses without property IDs cannot be pinned. v0.8 pins **task fields**; habit definition and daily occurrence field IDs are not yet supported. No automatic synchronization, real-device verification or reliable historical Pomodoro session export is claimed.
 
 ### Manual import safeguards and known gaps
 
