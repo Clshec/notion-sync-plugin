@@ -94,10 +94,13 @@ function mount(customRows, habitRows) {
         if (!page) throw new Error('Mock Notion page missing');
         const entries=Object.entries(opts.body.properties||{});
         assert.equal(entries.length,1,'Writeback must update only one property');
-        const [name,field]=entries[0];
-        assert.ok(name==='الوقت الفعلي'||name==='Habit Count','Patch only approved numeric fields');
+        const [idOrName,field]=entries[0];
+        const name=Object.keys(page.properties).find(n=>n===idOrName ||
+          (page.properties[n] && page.properties[n].id===idOrName));
+        assert.ok(name==='الوقت الفعلي'||name==='Habit Count'||name==='Actual Time',
+          'Patch only an approved existing numeric field or its stable ID');
         assert.ok(typeof field.number==='number');
-        page.properties[name]={type:'number',number:field.number};
+        page.properties[name]={...page.properties[name],type:'number',number:field.number};
         return page;
       }
       if (opts.method==='POST' && url.endsWith(habitId+'/query'))
@@ -143,7 +146,8 @@ function mount(customRows, habitRows) {
     PluginAPI:api,window:{PluginAPI:api},document,setTimeout,
     URL,console
   });
-  return {els:element,requests,stores,secretWrites,api,imports,updates,existingTasks,habitId,counters,setLogicalDay(day){logicalDay=day;}};
+  return {els:element,requests,stores,secretWrites,api,imports,updates,existingTasks,
+    habitId,counters,schema,habitSchema,setLogicalDay(day){logicalDay=day;}};
 }
 
 function configure(env) {
@@ -622,4 +626,90 @@ test('StopWatch requires explicit minutes/hours and never writes raw ms as count
   await env.els('previewHabitDay').events.click();
   assert.match(env.els('habitDayPlan').textContent,/1 → 10 minutes/);
   assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+});
+
+
+test('pin task field IDs then rename Notion property labels without losing preview/import/time writeback',async()=>{
+  const rows=[{object:'page',id:'rename1',properties:{
+    'المصدر':{type:'title',title:[{plain_text:'Original task'}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'مهمة'}]},
+    'يوم التنفيذ':{type:'date',date:{start:'2026-11-16'}},
+    'الوقت المخطط له':{type:'number',number:2},
+    'الوقت الفعلي':{type:'number',number:0},
+    'Status':{type:'status',status:{name:'In progress'}}
+  }}];
+  const env=mount(rows);
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('actualProp').value='الوقت الفعلي';
+  for(const [name,p] of Object.entries(env.schema))
+    p.id='stable-'+Object.keys(env.schema).indexOf(name);
+  for(const [name,p] of Object.entries(rows[0].properties))
+    p.id=env.schema[name].id;
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('pinProps').events.click();
+  assert.match(env.els('notice').textContent,/Pinned 7 stable/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(env.requests.filter(x=>x.opts.method==='POST').length,0);
+  const pinned=JSON.parse(env.stores.at(-1).data);
+  assert.equal(pinned.taskPropertyBindings.titleProp.input,'المصدر');
+  assert.equal(pinned.taskPropertyBindings.titleProp.id,env.schema['المصدر'].id);
+  assert.equal(pinned.taskPropertyBindings.actualProp.id,env.schema['الوقت الفعلي'].id);
+  assert.ok(!env.stores.some(x=>x.data.includes('ntn_FAKE_PRIVATE_TOKEN')));
+
+  // Rename several existing properties, keeping their Notion IDs intact.
+  for(const [from,to] of [
+    ['المصدر','Title'],['نوع الصفحة','Item Type'],
+    ['يوم التنفيذ','Execution Day'],['الوقت المخطط له','Planned Time'],
+    ['الوقت الفعلي','Actual Time']
+  ]) {
+    env.schema[to]=env.schema[from];delete env.schema[from];
+    rows[0].properties[to]=rows[0].properties[from];delete rows[0].properties[from];
+  }
+  // Even reusing an old property name must not hijack its pinned stable ID.
+  env.schema['المصدر']={type:'title',id:'different-title-id'};
+  rows[0].properties['المصدر']={type:'title',id:'different-title-id',
+    title:[{plain_text:'Wrong task'}]};
+  await env.els('previewBtn').events.click();
+  assert.equal(env.els('results').children.length,1);
+  assert.equal(env.els('results').children[0].children[1].textContent,'Original task');
+
+  // The selected original Notion page should still generate the correct task.
+  env.els('targetSpProject').value='projectX';
+  env.els('authorizeImport').checked=true;
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1);
+  assert.equal(env.imports[0].title,'Original task');
+  assert.equal(env.imports[0].timeEstimate,7200000);
+
+  // Time writeback uses the *property ID* and never creates a new field.
+  env.existingTasks.at(-1).timeSpent=3600000;
+  await env.els('planTimeBtn').events.click();
+  assert.match(env.els('timePlan').textContent,/1 eligible time updates/);
+  env.els('authorizeTime').checked=true;
+  await env.els('pushTimeBtn').events.click();
+  const writes=env.requests.filter(x=>x.opts.method==='PATCH');
+  assert.equal(writes.length,1);
+  assert.deepEqual(Object.keys(writes[0].opts.body.properties),
+    [env.schema['Actual Time'].id]);
+  assert.equal(rows[0].properties['Actual Time'].number,1);
+});
+
+test('removed pinned property ID fails closed instead of silently mapping to same-name property',async()=>{
+  const env=mount();
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  for(const [name,p] of Object.entries(env.schema))
+    p.id='field-'+Object.keys(env.schema).indexOf(name);
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('pinProps').events.click();
+  // Notion page schema replaces the old field with a new one of identical name.
+  env.schema['المصدر']={type:'title',id:'different-title-id'};
+  await env.els('previewBtn').events.click();
+  assert.match(env.els('notice').textContent,/Fix mapping/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='POST').length,0);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
 });
