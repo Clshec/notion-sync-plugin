@@ -181,3 +181,22 @@ test('invalid anchor baseline, Notion schema mismatch or missing token blocks ex
   assert.equal((await b.sync.runOnce()).written,0);
   assert.equal(b.requests.length,0);
 });
+
+
+test('automatic time heartbeat writes local-only outcome counters, no synced secrets',async()=>{
+  const f=fixture();
+  f.task.timeSpent=10800000;
+  await f.sync.heartbeat();
+  const raw=f.secrets.get('alf-auto-status-local-v1-time');
+  assert.ok(raw);
+  const record=JSON.parse(raw);
+  assert.equal(record.counts.written,1);
+  assert.equal(record.outcome,'ok');
+  assert.ok(!raw.includes(PAGE)&&!raw.includes('ntn_NOT_A_REAL_TOKEN'));
+  assert.ok(f.writes.every(x=>x.key!=='alf-auto-status-local-v1-time'));
+  const disabled=fixture();
+  disabled.secrets.delete('alf-auto-time-local-enabled-v1');
+  await disabled.sync.heartbeat();
+  assert.equal(disabled.secrets.has('alf-auto-status-local-v1-time'),false);
+  assert.equal(disabled.requests.length,0);
+});
