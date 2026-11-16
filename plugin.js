@@ -50,10 +50,34 @@ function log(message, type = 'info') {
     }
 }
 
+// Alf's public, schema-mapping runtime is still under development.
+// Fail closed: do not initialize the inherited sync engine (which assumes an
+// English Notion Tasks DB and may create/archive pages or sync a credential).
+// This is an intentional alpha safety gate, not an enabled Notion integration.
+const ALF_LEGACY_SYNC_DISABLED = true;
+
 // ===== INITIALIZATION =====
 
 async function initializePlugin() {
     try {
+        if (ALF_LEGACY_SYNC_DISABLED) {
+            // Safe preview: no config imports, credentials, hooks, timers, or HTTP calls.
+            PluginAPI.onMessage(async () => ({
+                success: false,
+                error: 'Alf is a safe foundation build. Notion sync is disabled until schema mapping and security migration pass tests.'
+            }));
+            PluginAPI.registerHeaderButton({
+                label: 'Alf Preview',
+                icon: 'info',
+                onClick: () => PluginAPI.showSnack({
+                    msg: 'Alf foundation: sync is disabled. No Notion data was modified.',
+                    type: 'INFO',
+                    ico: 'info'
+                })
+            });
+            log('Alf preview-only foundation; inherited sync engine is intentionally disabled');
+            return;
+        }
         log('Loading plugin configuration...');
 
         // Register message handler FIRST (before loading config)
@@ -405,6 +429,9 @@ function stopAutoSync() {
 
 // New simplified bidirectional sync function
 async function performBidirectionalSync() {
+    if (ALF_LEGACY_SYNC_DISABLED) {
+        throw new Error('Legacy Notion sync disabled: configure and verify Alf mapping and security first');
+    }
     if (!pluginConfig.apiKey || !pluginConfig.tasksDatabaseId || pluginConfig.connectionState !== 'configured') {
         throw new Error('Plugin not configured properly');
     }
