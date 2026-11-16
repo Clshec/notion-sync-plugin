@@ -41,7 +41,8 @@ function mount(customRows) {
     'الوقت المخطط له': { type: 'number' },
     'Status': { type: 'status' },
     'الحزمة الأب': { type: 'relation' },
-    'Priority': { type: 'select' }
+    'Priority': { type: 'select' },
+    'الوقت الفعلي': { type: 'number' }
   };
   const api = {
     onReady(fn) { fn(); },
@@ -64,7 +65,26 @@ function mount(customRows) {
       requests.push({url,opts});
       assert.equal(new URL(url).host, 'api.notion.com');
       assert.ok(opts.headers['Notion-Version']);
-      if (opts.method==='GET') return {properties:schema};
+      if (opts.method==='GET' && url.includes('/data_sources/')) return {properties:schema};
+      if (opts.method==='GET' && url.includes('/pages/')) {
+        const id=url.split('/').pop();
+        const page=(customRows||[]).find(p=>p.id===id);
+        if (!page) throw new Error('Mock Notion page missing');
+        return {...page,parent:{type:'data_source_id',data_source_id:'212b4a624b7d806989b9000b73ac11c8'}};
+      }
+      if (opts.method==='PATCH') {
+        assert.ok(url.includes('/pages/'),'Writeback can update existing pages only');
+        const id=url.split('/').pop();
+        const page=(customRows||[]).find(p=>p.id===id);
+        if (!page) throw new Error('Mock Notion page missing');
+        const entries=Object.entries(opts.body.properties||{});
+        assert.equal(entries.length,1,'Writeback must update only one property');
+        const [name,field]=entries[0];
+        assert.equal(name,'الوقت الفعلي');
+        assert.ok(typeof field.number==='number');
+        page.properties[name]={type:'number',number:field.number};
+        return page;
+      }
       if (opts.method==='POST') return {results: customRows || [
         {object:'page',id:'n1',properties:{
           'المصدر':{title:[{plain_text:'Sample task'}]},
@@ -316,4 +336,95 @@ test('import maps configured Done status and priority safely', async () => {
   assert.equal(env.imports[0].isDone,true);
   assert.equal(env.updates.length,1);
   assert.equal(env.updates[0].fields.priority,3);
+});
+
+
+function actualTestPage() {
+  return {object:'page',id:'tracked-item',properties:{
+    'المصدر':{type:'title',title:[{plain_text:'Tracked task'}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'مهمة'}]},
+    'الوقت الفعلي':{type:'number',number:0.5},
+    'Status':{status:{name:'In progress'}}
+  }};
+}
+
+async function setupActual(env) {
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('actualProp').value='الوقت الفعلي';
+  env.els('token').value='ntn_TEST_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  env.els('targetSpProject').value='projectX';
+  env.els('authorizeImport').checked=true;
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1);
+  const task=env.existingTasks.find(t=>t.id==='created1');
+  task.timeSpent=5400000;
+  return task;
+}
+
+test('actual time review makes no Notion writes until separate authorization',async()=>{
+  const rows=[actualTestPage()];
+  const env=mount(rows);
+  await setupActual(env);
+  await env.els('planTimeBtn').events.click();
+  assert.match(env.els('timePlan').textContent,/0.5 → 1.5 hours/);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  await env.els('pushTimeBtn').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.match(env.els('notice').textContent,/authorize Notion time writes/);
+});
+
+test('actual work time is written only to mapped Number property of correct page',async()=>{
+  const rows=[actualTestPage()];
+  const env=mount(rows);
+  await setupActual(env);
+  await env.els('planTimeBtn').events.click();
+  env.els('authorizeTime').checked=true;
+  await env.els('pushTimeBtn').events.click();
+  const patch=env.requests.filter(r=>r.opts.method==='PATCH');
+  assert.equal(patch.length,1);
+  assert.deepEqual(Object.keys(patch[0].opts.body.properties),['الوقت الفعلي']);
+  assert.equal(patch[0].opts.body.properties['الوقت الفعلي'].number,1.5);
+  assert.equal(rows[0].properties['الوقت الفعلي'].number,1.5);
+  assert.match(env.els('timeReport').textContent,/written to 1/);
+  assert.equal(env.els('authorizeTime').checked,false);
+});
+
+test('Notion time changed after preview produces conflict, never overwrites correction',async()=>{
+  const rows=[actualTestPage()];
+  const env=mount(rows);
+  await setupActual(env);
+  await env.els('planTimeBtn').events.click();
+  rows[0].properties['الوقت الفعلي'].number=0.75;
+  env.els('authorizeTime').checked=true;
+  await env.els('pushTimeBtn').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.match(env.els('timeReport').textContent,/changed since preview/);
+});
+
+test('time changed in SP after preview forces restaging rather than stale write',async()=>{
+  const rows=[actualTestPage()];
+  const env=mount(rows);
+  const task=await setupActual(env);
+  await env.els('planTimeBtn').events.click();
+  task.timeSpent=7200000;
+  env.els('authorizeTime').checked=true;
+  await env.els('pushTimeBtn').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.match(env.els('timeReport').textContent,/SP tracking changed/);
+});
+
+test('parent task rollup is excluded from actual-time writeback',async()=>{
+  const rows=[actualTestPage()];
+  const env=mount(rows);
+  const task=await setupActual(env);
+  task.subTaskIds=['child1'];
+  await env.els('planTimeBtn').events.click();
+  assert.match(env.els('timePlan').textContent,/0 eligible time updates/);
+  env.els('authorizeTime').checked=true;
+  await env.els('pushTimeBtn').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
 });
