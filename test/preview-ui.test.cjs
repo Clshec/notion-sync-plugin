@@ -178,8 +178,10 @@ test('manifest declares only Notion HTTP host and per-device secret API', () => 
   assert.equal(manifest.id, 'alf-notion-super-productivity');
   assert.ok(host.includes('PluginAPI.Hooks.ACTION'), 'live focus events use host API');
   assert.ok(host.includes('PluginAPI.Hooks.CURRENT_TASK_CHANGE'), 'task identity hook enabled');
-  assert.ok(!host.includes('PluginAPI.request('), 'host background code never calls Notion API');
-  assert.ok(!host.includes('updateTask('), 'no SP writes');
+  assert.ok(host.includes('alfCreateAutoPlanSync('), 'auto planning is separately opt-in');
+  assert.ok(host.includes("ALF_AUTO_PLAN_FLAG"), 'local-only enable flag exists');
+  assert.ok(host.includes("method:'GET'"), 'background Notion access is read-only');
+  assert.ok(!host.includes("method:'PATCH'"), 'background never PATCHes Notion');
   assert.ok(!host.includes('fetch('), 'no unguarded network calls');
 });
 
