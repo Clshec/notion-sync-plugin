@@ -1565,3 +1565,15 @@ test('manual habit-day preview and writeback refuse missing pagination cursor',a
   assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
   assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
 });
+
+
+test('v0.23 plugin intro discloses three optional automations and never claims all syncing is manual',()=>{
+  assert.ok(html.includes('EXPERIMENTAL · AUTO SYNC OFF BY DEFAULT'));
+  assert.ok(html.includes('Three narrowly scoped automatic modes are available'));
+  assert.ok(html.includes('disabled by default'));
+  assert.ok(!html.includes('No automatic sync, database creation or SuperSync modification.'));
+  assert.ok(html.includes('No Notion database, property or day-record creation'));
+  assert.ok(html.includes('separate device-local opt-in'),
+    'footer and intro both state narrowly scoped auto behavior');
+  assert.equal(manifest.version,'0.23.0');
+});
