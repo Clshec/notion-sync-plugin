@@ -310,7 +310,7 @@ code {font:inherit;white-space:nowrap}
         var selection=document.createElement('td'),checkbox=document.createElement('input');
         checkbox.type='checkbox';
         checkbox.className='rowSelector';
-        checkbox.dataset={pageId:page.id};
+        checkbox.dataset.pageId=page.id;
         checkbox.setAttribute('aria-label','Select '+textValue(p[c.titleProp]));
         selection.appendChild(checkbox);
         tr.appendChild(selection);
