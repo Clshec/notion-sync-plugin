@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.19 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.20 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,14 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.20: one Notion API request lane across all automatic engines
+
+The three separate opt-in background engines (planning pull, actual-time Number export, and explicitly approved existing habit-day updates) now use a **shared serialized request queue within one SP plugin runtime**. It spaces automatic HTTP requests by at least **450 ms** in the running host, avoiding the startup burst where all three engines could hit the same Notion integration's roughly 3-requests/second average rate limit. The UI's separately user-triggered manual Notion operations are not part of this lane, and it cannot coordinate multiple devices, other Notion integrations or external automations. Disabled engines continue to send no HTTP requests.
+
+An explicitly rejected Notion HTTP **429** response is retried **once**, with a bounded pause (using a trusted Retry-After value when provided). Other errors, network disconnects, timeouts, ambiguous HTTP outcomes and server errors **do not cause blind retries**, particularly not for a PATCH whose original outcome may be unknown. In those cases the existing numeric baseline/review conflict checks must determine whether another write is safe. The queue continues processing the next engine's requests even if a previous request fails. No new Notion database/row/property or SP task is created.
+
+Automated tests check serialization across concurrent requests, the minimum interval, bounded 429 handling, no replay after unknown PATCH, rejection of server errors, and recovery of the request queue after a failure. This does **not** constitute a global cross-device lock, durable background service, Notion transactional compare-and-swap or authoritative completed Pomodoro ledger. Real Windows/Android plugin integration remains pending.
 
 ### New v0.19: mandatory individual habit approvals (fixes overly broad v0.16 auto consent)
 
