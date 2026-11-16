@@ -481,7 +481,7 @@ code {font:inherit;white-space:nowrap}
     return lastVisibleRows.filter(function(page){return chosen.has(page.id);});
   }
   function relationId(page,config,key) {
-    if (!field) return '';
+    if (!config[key]) return '';
     var prop=taskProperty(page,config,key);
     return prop && Array.isArray(prop.relation) && prop.relation[0] ? prop.relation[0].id : '';
   }
