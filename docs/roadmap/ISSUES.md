@@ -129,3 +129,7 @@ The earlier strict-token matching still allowed a task's editable notes to conta
 ## v0.25 — only explicit HTTP 429 authorizes re-attempt
 
 Closed a potential unsafe automatic Number PATCH replay: v0.20 would retry on text `rate limit` or a `rate_limited` code even without a confirmed HTTP rejection. v0.25 demands structured HTTP status 429 before one bounded retry, never retries timeout/503/connection reset/unknown outcome even if the text mentions 429. Simulated network-failure-after-Notion-write tests verify exactly one attempt. Real cross-device atomicity and integration checks remain pending.
+
+## v0.26 — live Notion schema preflight and protected Number semantics
+
+Read-only inspection of the existing **اللوح** source confirmed the Title, task-type Multi-select, execution Date and planned/actual work-time Numbers plus **قاعدة العادات** relation; the existing habit-definition source has **العادة** Title and **التكرار** Select. The current board has **no independently named habit-completion count Number**. Do not claim the automatic SP ClickCounter→Notion daily count is ready for this board, or repurpose **الوقت الفعلي**/create a Notion field without user approval. Implemented rejection of aliased actual-time and partial-Pomodoro Number IDs, and rejection of a habit click count or incompatible stopwatch unit sharing the actual work-time Number. Enforced in UI preview and host-side auto engines, with regression tests. Real Notion API plugin integration and Android/SuperSync distributed single-writer verification remain pending.
