@@ -72,3 +72,11 @@ The official event should carry an idempotent ID, mode, task and duration togeth
 - Android/Desktop real focus-mode completion and app restart scenarios **remain to be tested**.
 
 [Main architecture](alf-sync.md) · [Time writeback](time-writeback.md)
+
+## Experimental v0.10: partial minimum manual writeback (NOT the authoritative count)
+
+The optional UI field `observedPomoProp` points to a **dedicated existing Number property** in the user's existing Notion task/board source. The owner must explicitly identify it as a partial observer minimum (for example `Observed Pomodoros (partial)`) and must not use `Completed Pomodoros`. Each selected and already-linked Notion task gets a dry-run preview of the count of unique, strict `live-sp-action-hook` records with `Pomodoro`, `automatic: true`, `manual: false`, `observedCompletion: true`, `verifiedCompletedPomodoro: true`, matching keyed `sessionId`, and valid start/end timestamps. The count is cumulative over known records and never divided out of tracked hours. There is **no mode/duration historical backfill**.
+
+This writeback is disabled unless the configured existing Number property has been pinned to its stable Notion property ID (v0.8). The user must select pages, stage reviewed differences and check a separate authorization box. On commit, re-fetch the exact data-source schema and Notion page; verify source, item type, property type/ID, unchanged original numeric value, task ID binding and unchanged sorted session IDs. Only monotonic positive increases are eligible; a higher Notion value, missing/zero observations, duplicate/replaced fields, deleted/moved pages, and observer inventory exceeding 2,000 records all stop/skip writes. PATCH touches only that one Number property. No Notion database/page/property creation or automatic background write is performed.
+
+Limitations: the observer may miss work on Android/background/restarts; it must never be presented as the completed count. GET/PATCH is not atomic and simultaneous manual export across two devices remains unsafe. Work tracked by parent and subtask is not merged: only the directly matched SP task's own observed sessions count. Production-quality focus analytics require the upstream typed session ledger and cross-device integration tests.
