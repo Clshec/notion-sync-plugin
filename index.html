@@ -1554,6 +1554,40 @@ code {font:inherit;white-space:nowrap}
     }
     if(!c.habitOccTypeValue) throw new Error('Select the exact Notion habit item type value');
   }
+  async function queryExistingHabitDay(c,day,sourceId,schema) {
+    // Query the exact existing board source and all matching date/type pages.
+    // Never choose a single page from a potentially truncated result.
+    validateOccurrenceMapping(schema,c);
+    var kind=habitSchemaProperty(schema,c,'habitOccTypeProp').type;
+    var typeFilter={property:habitWriteKey(c,'habitOccTypeProp')};
+    typeFilter[kind]={};
+    typeFilter[kind][kind==='select'?'equals':'contains']=c.habitOccTypeValue;
+    var filter={and:[typeFilter,{property:habitWriteKey(c,'habitOccDayProp'),date:{equals:day}}]};
+    var entries=[],cursor,truncated=false;
+    do {
+      var payload={page_size:Math.min(100,300-entries.length),filter:filter};
+      if(cursor)payload.start_cursor=cursor;
+      var data=await notion('/data_sources/'+encodeURIComponent(sourceId)+'/query','POST',payload);
+      if(!data||!Array.isArray(data.results))throw new Error('Invalid habit occurrence query');
+      entries=entries.concat(data.results);
+      cursor=data.has_more?data.next_cursor:null;
+      if(entries.length>=300){truncated=!!cursor;break;}
+    }while(cursor);
+    if(truncated)throw new Error('More than 300 habit-day candidates; refuse truncated habit-day writes');
+    return entries;
+  }
+  function habitDayCandidates(entries,c,day) {
+    var grouped=new Map();
+    for(var page of entries) {
+      if(!occurrenceMatches(page,c,day))continue;
+      var habitId=habitRelId(page,c);
+      if(!habitId)continue; // ambiguous relations are ineligible
+      var key=normalizedUUID(habitId)+':'+day;
+      if(!grouped.has(key))grouped.set(key,[]);
+      grouped.get(key).push(page.id);
+    }
+    return grouped;
+  }
   async function stageHabitDay() {
     if(active)return;
     busy(true);
@@ -1569,22 +1603,7 @@ code {font:inherit;white-space:nowrap}
         throw new Error('Cannot determine SP logical day');
       var info=await notion('/data_sources/'+encodeURIComponent(sourceId));
       validateOccurrenceMapping(info.properties||{},c);
-      var kind=habitSchemaProperty(info.properties||{},c,'habitOccTypeProp').type;
-      var typeFilter={property:habitWriteKey(c,'habitOccTypeProp')};
-      typeFilter[kind]={};
-      typeFilter[kind][kind==='select'?'equals':'contains']=c.habitOccTypeValue;
-      var filter={and:[typeFilter,{property:habitWriteKey(c,'habitOccDayProp'),date:{equals:day}}]};
-      var entries=[],cursor,truncated=false;
-      do {
-        var payload={page_size:Math.min(100,300-entries.length),filter:filter};
-        if(cursor)payload.start_cursor=cursor;
-        var data=await notion('/data_sources/'+encodeURIComponent(sourceId)+'/query','POST',payload);
-        if(!data||!Array.isArray(data.results))throw new Error('Invalid habit occurrence query');
-        entries=entries.concat(data.results);
-        cursor=data.has_more?data.next_cursor:null;
-        if(entries.length>=300){truncated=!!cursor;break;}
-      }while(cursor);
-      if(truncated)throw new Error('More than 300 habit-day candidates; reduce scope before writeback');
+      var entries=await queryExistingHabitDay(c,day,sourceId,info.properties||{});
       var state=await PluginAPI.getAppState();
       var counters=state&&state.simpleCounters||{};
       var staged=[],notes=[],seen=new Set(),duplicate=new Set();
@@ -1642,11 +1661,16 @@ code {font:inherit;white-space:nowrap}
       if(!ctx||ctx.todayStr!==plan.day)
         throw new Error('SP logical day changed; restage before any writes');
       var info=await notion('/data_sources/'+encodeURIComponent(plan.sourceId));
-      validateOccurrenceMapping(info.properties||{},c);
+      var freshEntries=await queryExistingHabitDay(c,plan.day,plan.sourceId,info.properties||{});
+      var freshGroups=habitDayCandidates(freshEntries,c,plan.day);
       var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
       var done=0,skipped=0,issues=[];
       for(var e of plan.updates) {
         try {
+          var sameDayPages=freshGroups.get(normalizedUUID(e.habitId)+':'+e.day)||[];
+          if(sameDayPages.length!==1 || sameDayPages[0]!==e.pageId) {
+            skipped++;issues.push('Habit-day occurrence added/removed/duplicated since preview: '+e.pageId);continue;
+          }
           var rawLink=await PluginAPI.loadSyncedData(HABIT_KEY_PREFIX+e.habitId);
           var savedLink=rawLink?JSON.parse(rawLink):null;
           if(!savedLink || normalizedUUID(savedLink.notionId)!==normalizedUUID(e.habitId) ||
