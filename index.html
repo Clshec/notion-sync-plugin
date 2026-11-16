@@ -91,6 +91,9 @@ code {font:inherit;white-space:nowrap}
     <label>Time unit for Notion number properties
       <select id="unit"><option value="hours">Hours</option><option value="minutes">Minutes</option></select>
     </label>
+    <label>Pomodoro work interval (minutes; match your SP timer)
+      <input id="pomodoroWorkMinutes" type="number" min="1" max="180" step="1" value="25">
+    </label>
   </div>
   <div class="actions">
     <button id="schemaBtn">Inspect existing data source schema</button>
@@ -103,8 +106,9 @@ code {font:inherit;white-space:nowrap}
 <section>
   <h2>3. Preview results</h2>
   <p id="summary" class="muted">No query has been made yet.</p>
+  <p class="muted"><small>Planned Pomodoros = ceiling(planned work minutes ÷ configured work interval). This is a target, not an achieved count. Observations are incomplete, not a full session history. Rest breaks are excluded; SP timer settings remain unchanged.</small></p>
   <div class="table-wrap">
-    <table><thead><tr><th>Select</th><th>Notion task</th><th>Type</th><th>Execution day</th><th>Deadline</th><th>Estimate</th><th>Actual</th><th>Status</th></tr></thead><tbody id="results"></tbody></table>
+    <table><thead><tr><th>Select</th><th>Notion task</th><th>Type</th><th>Execution day</th><th>Deadline</th><th>Estimate</th><th>Actual</th><th>Status</th><th>Planned Pomodoros</th><th>Observed focus (incomplete)</th></tr></thead><tbody id="results"></tbody></table>
   </div>
 </section>
 <section>
@@ -139,7 +143,7 @@ code {font:inherit;white-space:nowrap}
 <section>
   <h2>6. Observed focus sessions (read-only report)</h2>
   <p>Alf records only future focus-session starts and completions observed while the plugin is active. Unknown mode/task, interrupted, or ambiguous sessions are excluded. A verified automatic Pomodoro completion counts once by session ID; manually ended sessions do not count as completed Pomodoros. Historical sessions cannot be backfilled. This report does not write anything to Notion.</p>
-  <div class="actions"><button id="loadSessions">Read locally observed focus sessions</button></div>
+  <div class="actions"><button id="loadSessions">Read observed focus sessions and compare to the task preview (NO WRITES)</button></div>
   <pre id="focusReport" style="white-space:pre-wrap;max-height:270px;overflow:auto"></pre>
 </section>
 <section>
@@ -204,7 +208,7 @@ code {font:inherit;white-space:nowrap}
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
-    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','habitTitleProp','habitCadenceProp','habitOccTypeProp','habitOccTypeValue','habitOccRelationProp','habitOccDayProp','habitOccCountProp','habitOccUnit'];
+    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','pomodoroWorkMinutes','habitTitleProp','habitCadenceProp','habitOccTypeProp','habitOccTypeValue','habitOccRelationProp','habitOccDayProp','habitOccCountProp','habitOccUnit'];
   var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
     deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],
     statusProp:['status','select'],priorityProp:['select'],projectProp:['relation'],parentProp:['relation']};
@@ -404,6 +408,18 @@ code {font:inherit;white-space:nowrap}
     } catch(e) { fail(e); }
     finally { busy(false); }
   }
+  function pomodoroWorkInterval(c) {
+    var n=Number(c.pomodoroWorkMinutes);
+    if(!Number.isSafeInteger(n)||n<1||n>180)
+      throw new Error('Pomodoro work interval must be a whole number of minutes from 1 to 180');
+    return n;
+  }
+  function plannedPomodoros(page,c,interval) {
+    if(!c.estimateProp)return '—';
+    var estimate=estimateValue(page,c);
+    return estimate===null?'—':String(Math.ceil(estimate/(interval*60000)));
+  }
+
   async function preview() {
     if (active) return;
     busy(true);
@@ -419,6 +435,7 @@ code {font:inherit;white-space:nowrap}
       if (!c.titleProp || !c.typeProp || allowed.length === 0) {
         throw new Error('Set a title property, an item type property, and at least one explicitly allowed item type');
       }
+      var interval=pomodoroWorkInterval(c);
       var source = await notion('/data_sources/' + encodeURIComponent(id));
       var schema = source.properties || {};
       var mismatches = propTypes(schema,c);
@@ -459,13 +476,15 @@ code {font:inherit;white-space:nowrap}
         appendCell(tr,numberValue(taskProperty(page,c,'estimateProp'),c.unit));
         appendCell(tr,numberValue(taskProperty(page,c,'actualProp'),c.unit));
         appendCell(tr,statusValue(taskProperty(page,c,'statusProp')));
+        appendCell(tr,plannedPomodoros(page,c,interval));
+        appendCell(tr,'— (compare after linking)');
         tbody.appendChild(tr);
       });
       ui('summary').textContent='Read '+all.length+' Notion pages; '+rows.length+
         ' matched configured task types. Displaying first '+Math.min(rows.length,75)+
         '. Local SP active tasks: '+(Array.isArray(tasks)?tasks.length:0)+'.'+
         (truncated?' Preview capped at '+MAX_PAGES+' pages; data source has more.':'')+
-        ' No data written.';
+        ' Work interval: '+interval+'m. Planned Pomodoros are estimates, not completion claims. No data written.';
       message('Read-only preview finished. No Notion pages, Super Productivity tasks or habits were modified.');
     } catch(e) { fail(e); }
     finally {busy(false);}
@@ -834,11 +853,45 @@ code {font:inherit;white-space:nowrap}
         item.total++;
         if (row.mode==='Flowtime') item.flowtime++;
         if (row.mode==='Countdown') item.countdown++;
-        if (row.verifiedCompletedPomodoro === true && row.mode==='Pomodoro') {
+        if (row.verifiedCompletedPomodoro === true && row.automatic===true &&
+            row.observedCompletion===true && row.mode==='Pomodoro') {
           item.pomodoro++;verified++;
         }
         observed++;
         perTask.set(row.taskId,item);
+      }
+      // Read-only comparison: only pages with an unambiguous SP task marker
+      // are associated with observations. Never interpret a missing observation
+      // as proof that no Pomodoro took place before the observer was enabled.
+      var c=getForm();
+      if(lastPreviewConfig && lastPreviewConfig===JSON.stringify(c)) {
+        var allSpTasks=[].concat(await PluginAPI.getTasks()||[],
+          await PluginAPI.getArchivedTasks()||[]);
+        var previewRows=ui('results').children||[];
+        for(var i=0;i<lastVisibleRows.length;i++) {
+          var page=lastVisibleRows[i],matching=allSpTasks.filter(function(t){
+            return t && typeof t.notes==='string' &&
+              t.notes.includes(notionPageMarker(page.id));
+          });
+          var cell=previewRows[i]&&previewRows[i].children[9];
+          if(!cell)continue;
+          var rawLink=await PluginAPI.loadSyncedData(LINK_PREFIX+page.id);
+          var linked=null;
+          if(rawLink) {
+            try {
+              var link=JSON.parse(rawLink);
+              if(link && link.notionId===page.id && typeof link.spId==='string')
+                linked=link.spId;
+            }catch(_){ /* a corrupt or ambiguous link is never trusted */ }
+          }
+          if(matching.length!==1 || (linked && matching[0].id!==linked)) {
+            cell.textContent='— (unlinked/ambiguous)';
+            continue;
+          }
+          var counts=perTask.get(matching[0].id) || {pomodoro:0,flowtime:0,countdown:0};
+          cell.textContent=counts.pomodoro+' P · '+counts.flowtime+' F · '+
+            counts.countdown+' C observed* (history incomplete)';
+        }
       }
       ui('focusReport').textContent=
         'Observed finished sessions: '+observed+
@@ -1143,6 +1196,7 @@ code {font:inherit;white-space:nowrap}
         var c=JSON.parse(saved);
         if (c && c.version===2) putForm(c);
       }
+      if(!ui('pomodoroWorkMinutes').value)ui('pomodoroWorkMinutes').value='25';
       var local=await PluginAPI.getSecret(TOKEN_KEY);
       message(local?'Local Notion credential is present on this device. Preview remains read-only.':
         'No local Notion credential found. Save a token to inspect your data source.');

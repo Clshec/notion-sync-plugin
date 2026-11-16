@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.8 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.9 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,14 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.9: read-only Pomodoro planning versus observed SP focus sessions
+
+The Notion task preview now displays a **Planned Pomodoros** target derived solely from the existing configured estimate field (`Planned Time` / `الوقت المخطط له`) and an explicit **Pomodoro work interval (minutes)** setting (defaults to 25, allowed range 1–180). No Notion property is added: `ceil(plannedMinutes / workIntervalMinutes)` is computed locally. Match this interval with Super Productivity's timer settings; the plugin does not modify SP focus or break settings.
+
+The preview also includes an **Observed focus (incomplete)** column. After previewing/importing already-linked tasks, press **Read observed focus sessions and compare to the task preview**. The existing verified action observer's per-session synced metadata is grouped by unique ID and associated only with unambiguous SP task markers. The column shows observed **P** (automatically completed Pomodoro), **F** (Flowtime finish), and **C** (Countdown finish) separately. An unobserved session is **unknown**, never proof that the user did no work. This comparison is read-only, never updates Notion or the SP timer, and cannot backfill history or guarantee every completion was captured (e.g. Android background restrictions).
+
+**Do not use observed counts as complete authoritative Pomodoro history.** Automatic per-task Pomodoro/Flowtime/Countdown writeback to Notion is still blocked pending a supported reliable historical SP session API and cross-device validation. No Notion database or property is created by this feature.
 
 ### New v0.8: opt-in stable Notion task property IDs (rename-safe)
 
