@@ -40,3 +40,11 @@ Any ambiguous, stale, moved or conflicting page **is skipped**, not overwritten.
 Mock tests assert: no PATCH during previews, separate authorization, property-only mutation, rereading the same page, aborting on changed Notion values or changed SP time, and skipping parent rollups. They **do not replace live integration tests**.
 
 Related: [field mapping](field-mapping.md), [architecture](alf-sync.md), [security](../../SECURITY.md).
+
+## v0.15 separate, opt-in automatic tracked-time export (experimental)
+
+Adds a disabled-by-default, per-device auto-export toggle (`alf-auto-time-local-enabled-v1`) and a separate set of reviewed synced baseline records (`alf-time-anchor-v1-` + original Notion page ID). Baselines can only be prepared from selected **already-linked, non-parent SP tasks** with a positive, safe, tracked `timeSpent` exactly equal to the current Notion Number after explicit hours/minutes conversion; the user must first use the reviewed manual time writeback if mismatched. Pin original Notion task type and Actual Time property IDs. No stored credential or auto-enable flag is synced.
+
+Each bounded runtime cycle (5 anchors per ~10 minutes, while SP's plugin is running) verifies exact marker + independent page link, task project/parent/rollup identity, monotonic `timeSpent` and Notion Number, configured source/type/property IDs, one current Notion page with unchanged old Number, fresh SP time/link/anchor, and a second Notion GET before PATCH. It writes one existing Number property, by immutable property ID, only if the positive converted time increased. It then persists the new expected time and numeric value. Concurrent user correction, higher Notion value, lost credentials, changed mapping or replaced property is a conflict, never silently reset or overwritten.
+
+Known limitations are non-atomic GET/PATCH and independent synced metadata delivery (cannot guarantee no concurrent cross-device PATCH). Therefore automatic time export must be enabled on only one test device. The host can suspend the plugin on Android. If patch success is uncertain, the baseline is stale and **next run stops**, awaiting manual reconciliation. No new Notion database/property/row or SP task is created. No focus-mode statistics are inferred from timeSpent.
