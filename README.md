@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.11 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.12 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,16 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.12: rename-safe existing Notion habit fields, with stricter daily writeback guards
+
+Habit definitions remain in the existing Notion habit database and habit occurrences remain in the existing board/task database. Users can now **Pin existing habit field IDs** in the plugin to preserve a stable mapping for the definition's title and cadence, and for the occurrence's type, relation to definition, execution day and numeric count/duration. Pinning reads the existing Notion data-source schemas and saves field IDs in synced **nonsecret mapping metadata**; it never creates or renames a Notion database, page, property, habit or counter. This builds on the previously implemented task-field pins and leaves those pins intact.
+
+The definition preview and manual Notion-habit ↔ existing SP SimpleCounter mapping resolve the pinned field identities even if the display labels are translated from Arabic to English. Daily occurrence queries use the pinned property IDs in Notion filters, and the explicitly authorized daily count writeback PATCH uses the pinned **Number property ID**, not its mutable display name. If an ID was removed/replaced, there is no fallback to a different field with the same name; validation fails rather than risking the historical record.
+
+**Safety change:** before writing daily habit counts, the user must pin **all four existing occurrence properties** (type, definition relation, logical day, and count). Previews of habit definitions remain readable with old name-based configurations, but existing v0.11 users need to click the new pin action before resuming the manually approved habit-day writeback. The plugin also re-reads the current Notion schema immediately before the write and verifies that the habit definition → SP counter ID link is unchanged since preview. It continues to guard on the SP logical day, a matching existing occurrence row and relation, and an unchanged Notion numeric value. No silent create, deletion or default failure status is introduced for habits, including break/avoidance habits.
+
+**Remaining:** This does not provide automatic habit definition creation in the SP Habit Tracker, new Notion day occurrence creation, a cross-device lock, conflict-free bidirectional sync, or authoritative historical focus-mode sessions. Real Android/Windows/sandbox Notion tests remain necessary before production use.
 
 ### New v0.11: Notion planning refresh on existing Super Productivity tasks (manual)
 
