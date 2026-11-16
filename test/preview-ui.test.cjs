@@ -1320,3 +1320,85 @@ test('automatic baselines refuse changed Notion source or allowed task type',asy
   assert.match(env.els('autoSeedReport').textContent,/0 matching linked task baselines/);
   assert.equal(env.stores.filter(x=>x.key.startsWith('alf-plan-anchor-v1-')).length,0);
 });
+
+function autoTimeExamplePage() {
+  return {object:'page',id:'work-time-n1',properties:{
+    'المصدر':{type:'title',title:[{plain_text:'Tracked test task'}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'مهمة'}]},
+    'الوقت الفعلي':{type:'number',number:2},
+    'الوقت المخطط له':{type:'number',number:1}
+  }};
+}
+async function setupAutoTimeUi(env,rows) {
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('actualProp').value='الوقت الفعلي';
+  for(const [name,p] of Object.entries(env.schema))
+    p.id=p.id||'stable-work-'+Object.keys(env.schema).indexOf(name);
+  for(const [name,p] of Object.entries(rows[0].properties))p.id=env.schema[name].id;
+  env.els('token').value='ntn_TEST_TIME_TOKEN';
+  await env.els('save').events.click();
+  await env.els('pinProps').events.click();
+  await env.els('previewBtn').events.click();
+  env.els('targetSpProject').value='projectX';
+  env.els('authorizeImport').checked=true;
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('importBtn').events.click();
+  const task=env.existingTasks.at(-1);
+  task.timeSpent=7200000;
+  await env.els('previewBtn').events.click();
+  env.els('results').children[0].children[0].children[0].checked=true;
+  return task;
+}
+test('opt-in work-time export prepares linked exact-matching Number baseline only',async()=>{
+  const rows=[autoTimeExamplePage()],env=mount(rows);
+  const task=await setupAutoTimeUi(env,rows);
+  await env.els('seedAutoTimeBtn').events.click();
+  assert.match(env.els('notice').textContent,/Explicitly authorize/);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-time-anchor-v1-')).length,0);
+  env.els('authorizeAutoTimeSeed').checked=true;
+  await env.els('seedAutoTimeBtn').events.click();
+  assert.match(env.els('autoTimeSeedReport').textContent,/1 matching time baselines prepared/);
+  const result=env.stores.filter(x=>x.key.startsWith('alf-time-anchor-v1-'));
+  assert.equal(result.length,1);
+  const anchor=JSON.parse(result[0].data);
+  assert.equal(anchor.notionId,rows[0].id);
+  assert.equal(anchor.spId,task.id);
+  assert.equal(anchor.expectedSpMs,7200000);
+  assert.equal(anchor.expectedNotion,2);
+  assert.equal(JSON.parse(anchor.spec).actualId,env.schema['الوقت الفعلي'].id);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+test('work-time export cannot enable without local consent and at least one seeded match',async()=>{
+  const rows=[autoTimeExamplePage()],env=mount(rows);
+  await setupAutoTimeUi(env,rows);
+  await env.els('enableAutoTimeBtn').events.click();
+  assert.match(env.els('notice').textContent,/Explicitly authorize ongoing/);
+  assert.equal(await env.api.getSecret('alf-auto-time-local-enabled-v1'),null);
+  env.els('authorizeAutoTimeLocal').checked=true;
+  await env.els('enableAutoTimeBtn').events.click();
+  assert.match(env.els('notice').textContent,/Prepare at least one reviewed/);
+  env.els('authorizeAutoTimeSeed').checked=true;
+  await env.els('seedAutoTimeBtn').events.click();
+  env.els('authorizeAutoTimeLocal').checked=true;
+  await env.els('enableAutoTimeBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-time-local-enabled-v1'),'enabled');
+  assert.equal(await env.api.getSecret('alf-notion-token'),'ntn_TEST_TIME_TOKEN');
+  assert.equal(env.stores.filter(x=>x.key==='alf-auto-time-local-enabled-v1').length,0);
+  await env.els('disableAutoTimeBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-time-local-enabled-v1'),null);
+});
+test('mismatched or parent task SP tracked time never seeds an automated Notion export',async()=>{
+  const rows=[autoTimeExamplePage()],env=mount(rows);
+  const task=await setupAutoTimeUi(env,rows);
+  task.timeSpent=3600000;
+  env.els('authorizeAutoTimeSeed').checked=true;
+  await env.els('seedAutoTimeBtn').events.click();
+  assert.match(env.els('autoTimeSeedReport').textContent,/0 matching time baselines/);
+  task.timeSpent=7200000;
+  task.subTaskIds=['subtask'];
+  env.els('authorizeAutoTimeSeed').checked=true;
+  await env.els('seedAutoTimeBtn').events.click();
+  assert.match(env.els('autoTimeSeedReport').textContent,/0 matching time baselines/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
