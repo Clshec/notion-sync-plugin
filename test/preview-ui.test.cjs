@@ -1416,6 +1416,11 @@ test('automatic habit-day export requires separate consent and a current pinned 
   env.els('authorizeAutoHabitsLocal').checked=true;
   await env.els('enableAutoHabitsBtn').events.click();
   assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),'enabled');
+  const scope=JSON.parse(await env.api.getSecret('alf-auto-habit-local-scope-v1'));
+  assert.equal(scope.version,1);
+  assert.equal(scope.grants.length,1);
+  assert.equal(scope.grants[0].habitId,'habit-original-1');
+  assert.equal(scope.grants[0].counterId,'a');
   const approvals=env.stores.filter(x=>x.key.startsWith('alf-habit-auto-allow-v1-'));
   assert.equal(approvals.length,1,'only explicitly reviewed habit definition approved');
   const permission=JSON.parse(approvals[0].data);
@@ -1429,6 +1434,8 @@ test('automatic habit-day export requires separate consent and a current pinned 
     'enabled flag must never go to SuperSync');
   await env.els('disableAutoHabitsBtn').events.click();
   assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-scope-v1'),null,
+    'disable revokes the device-local habit scope, not only the enable flag');
 });
 
 test('changing SP logical day after habit preview refuses enabling auto habit export',async()=>{
@@ -1600,4 +1607,29 @@ test('manual importer refuses to adopt ambiguous multi-page task markers',async(
   assert.equal(await env.api.loadSyncedData(linkKey),null,
     'ambiguous marker cannot be automatically relinked');
   assert.match(env.els('importReport').textContent,/multiple Notion pages/);
+});
+
+
+test('re-approving habits replaces local device scope instead of accumulating prior grants',async()=>{
+  const rows=[habitOccurrence('habit-original-1','habit-occ-1',0)],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  const oldScope=JSON.parse(await env.api.getSecret('alf-auto-habit-local-scope-v1'));
+  assert.equal(oldScope.grants[0].habitId,'habit-original-1');
+  // A later preview approves only a different existing definition.
+  rows[0].properties['قاعدة العادات'].relation=[{id:'habit-second-only'}];
+  await env.api.persistDataSynced(JSON.stringify({
+    version:1,notionId:'habit-second-only',spCounterId:'a',notionSourceId:env.habitId
+  }),'alf-habit-definition-link-v1-habit-second-only');
+  await env.els('previewHabitDay').events.click();
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),'enabled');
+  const newScope=JSON.parse(await env.api.getSecret('alf-auto-habit-local-scope-v1'));
+  assert.deepEqual(newScope.grants,[{habitId:'habit-second-only',counterId:'a'}]);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.equal(env.stores.filter(x=>x.key==='alf-auto-habit-local-scope-v1').length,0,
+    'per-device scope never goes into SuperSync');
 });

@@ -716,6 +716,7 @@ const ALF_AUTO_HABIT_FLAG='alf-auto-habit-local-enabled-v1';
 const ALF_AUTO_HABIT_PREFIX='alf-habit-auto-anchor-v1-';
 const ALF_AUTO_HABIT_LINK_PREFIX='alf-habit-definition-link-v1-';
 const ALF_AUTO_HABIT_APPROVAL_PREFIX='alf-habit-auto-allow-v1-';
+const ALF_AUTO_HABIT_DEVICE_SCOPE_KEY='alf-auto-habit-local-scope-v1';
 const ALF_AUTO_HABIT_PER_CYCLE=3;
 function alfAutoHabitSpec(c) {
   if(!c||c.version!==2)throw new Error('Invalid Notion mapping');
@@ -830,10 +831,20 @@ function alfCreateAutoHabitSync(api,options) {
     }
     const token=await api.getSecret('alf-notion-token');
     if(!token){stats.errors++;return stats;}
-    let spec,kind,day,allPages,linksById,duplicateCounters;
+    let spec,kind,day,allPages,linksById,duplicateCounters,scope,scopeRaw;
     try {
       const configRaw=await api.loadSyncedData(ALF_AUTO_PLAN_MAPPING_KEY);
       spec=alfAutoHabitSpec(configRaw?JSON.parse(configRaw):null);
+      // Synced approval history is NOT a device grant. Only the latest
+      // local scope explicitly reviewed on THIS device permits a write.
+      scopeRaw=await api.getSecret(ALF_AUTO_HABIT_DEVICE_SCOPE_KEY);
+      scope=scopeRaw?JSON.parse(scopeRaw):null;
+      if(!scope || scope.version!==1 ||
+         scope.spec!==JSON.stringify(spec) ||
+         !Array.isArray(scope.grants) || !scope.grants.length ||
+         scope.grants.some(g=>!g || typeof g.habitId!=='string' ||
+           !g.habitId || typeof g.counterId!=='string' || !g.counterId))
+        throw new Error('Missing current device-only habit scope; re-review and consent');
       const ctx=await api.getDayContext();
       day=ctx&&ctx.todayStr;
       if(typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day))
@@ -881,6 +892,10 @@ function alfCreateAutoHabitSync(api,options) {
       if(group.length!==1){stats.conflicts++;continue;}
       const {page,info}=group[0],ref=linksById.get(habitKey);
       if(!ref||duplicateCounters.has(ref.link.spCounterId)){stats.conflicts++;continue;}
+      if(!scope.grants.some(g=>g.habitId===info.habitId &&
+           g.counterId===ref.link.spCounterId)) {
+        stats.conflicts++;continue;
+      }
       // A linked definition is NOT itself permission for unattended writes.
       // No v0.18 auto-enabled device gets legacy implicit blanket approval.
       const approvalKey=ALF_AUTO_HABIT_APPROVAL_PREFIX+info.habitId;
@@ -956,6 +971,7 @@ function alfCreateAutoHabitSync(api,options) {
            await api.loadSyncedData(ref.key)!==ref.raw ||
            await api.loadSyncedData(approvalKey)!==approvalRaw ||
            await api.loadSyncedData(anchorKey)!==rawAnchor ||
+           await api.getSecret(ALF_AUTO_HABIT_DEVICE_SCOPE_KEY)!==scopeRaw ||
            await api.getSecret(ALF_AUTO_HABIT_FLAG)!=='enabled'){
           stats.conflicts++;continue;
         }

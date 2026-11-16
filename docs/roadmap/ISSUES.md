@@ -129,3 +129,7 @@ The earlier strict-token matching still allowed a task's editable notes to conta
 ## v0.25 — only explicit HTTP 429 authorizes re-attempt
 
 Closed a potential unsafe automatic Number PATCH replay: v0.20 would retry on text `rate limit` or a `rate_limited` code even without a confirmed HTTP rejection. v0.25 demands structured HTTP status 429 before one bounded retry, never retries timeout/503/connection reset/unknown outcome even if the text mentions 429. Simulated network-failure-after-Notion-write tests verify exactly one attempt. Real cross-device atomicity and integration checks remain pending.
+
+## v0.26 — consent replacement and per-device revocation
+
+Fixed stale synced habit approval accumulation: an old synced per-definition allow record must never silently expand a later subset that a user approves. Each deliberate enable now records a **replacement device-only scope** of exact habit/counter pairs bound to the pinned Notion occurrence mapping. The local enabled flag is cleared before replacement and only restored after its successful save. The runtime requires both a matching original synced per-definition approval and a currently selected local grant, rechecking the local scope before PATCH. Disable clears local flag **and** local scope. Older installations that have historic synced approvals but no new local scope safely stop unattended habit-day writes until re-approved. No schema changes or production Notion data touched. Multi-device distributed-lock and full focus ledger remain unresolved.

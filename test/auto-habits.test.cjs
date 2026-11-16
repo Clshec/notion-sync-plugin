@@ -58,9 +58,12 @@ function fixture(){
     ['alf-habit-definition-link-v1-'+HABIT,JSON.stringify(linked)],
     ['alf-habit-auto-allow-v1-'+HABIT,JSON.stringify(consent)]
   ]);
+  const localScope={version:1,spec:JSON.stringify(consentSpec),
+    grants:[{habitId:HABIT,counterId:'a'}]};
   const secrets=new Map([
     ['alf-notion-token','ntn_FAKE_HABIT_TOKEN'],
-    ['alf-auto-habit-local-enabled-v1','enabled']
+    ['alf-auto-habit-local-enabled-v1','enabled'],
+    ['alf-auto-habit-local-scope-v1',JSON.stringify(localScope)]
   ]);
   const requests=[],metadata=[],env={day:DAY,onQuery:null,queryCount:0};
   const api={
@@ -223,6 +226,9 @@ test('StopWatch minutes write explicit converted Number, never raw milliseconds'
   const spec=JSON.parse(consent.spec);spec.unit='minutes';
   consent.spec=JSON.stringify(spec);
   f.store.set('alf-habit-auto-allow-v1-'+HABIT,JSON.stringify(consent));
+  const scope=JSON.parse(f.secrets.get('alf-auto-habit-local-scope-v1'));
+  scope.spec=consent.spec;
+  f.secrets.set('alf-auto-habit-local-scope-v1',JSON.stringify(scope));
   f.counter.type='StopWatch';
   f.counter.countOnDay[DAY]=600000;
   const result=await f.engine.runOnce();
@@ -420,4 +426,55 @@ test('missing next cursor with has_more true fails closed before automatic habit
   assert.equal(result.errors,1);
   assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
   assert.equal(f.metadata.length,0);
+});
+
+
+test('previous synced approval without explicit current device habit scope never writes',async()=>{
+  const f=fixture();
+  f.secrets.delete('alf-auto-habit-local-scope-v1');
+  const r=await f.engine.runOnce();
+  assert.equal(r.written,0);
+  assert.equal(r.errors,1);
+  assert.equal(f.requests.length,0,'fail closed before contacting Notion');
+  assert.equal(f.metadata.length,0);
+});
+test('previously approved definition absent from replacement local scope cannot write',async()=>{
+  const f=fixture();
+  const scope=JSON.parse(f.secrets.get('alf-auto-habit-local-scope-v1'));
+  scope.grants=[{habitId:'a-different-reviewed-habit',counterId:'b'}];
+  f.secrets.set('alf-auto-habit-local-scope-v1',JSON.stringify(scope));
+  const r=await f.engine.runOnce();
+  assert.equal(r.written,0);
+  assert.equal(r.conflicts,1);
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+test('a changed counter or field mapping cannot inherit a prior device scope',async()=>{
+  for(const change of ['counter','mapping']){
+    const f=fixture();
+    const scope=JSON.parse(f.secrets.get('alf-auto-habit-local-scope-v1'));
+    if(change==='counter')scope.grants[0].counterId='unrelated-counter';
+    else scope.spec='{"old":"different mapping"}';
+    f.secrets.set('alf-auto-habit-local-scope-v1',JSON.stringify(scope));
+    const r=await f.engine.runOnce();
+    assert.equal(r.written,0);
+    assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  }
+});
+test('revoking or replacing the local habit scope during in-flight GET prevents PATCH',async()=>{
+  for(const action of ['remove','replace']){
+    const f=fixture(),before=f.api.request;
+    f.api.request=async(url,opts)=>{
+      const result=await before(url,opts);
+      if(opts.method==='GET'&&url.includes('/pages/')){
+        if(action==='remove')f.secrets.delete('alf-auto-habit-local-scope-v1');
+        else f.secrets.set('alf-auto-habit-local-scope-v1',
+          JSON.stringify({version:1,spec:'other',grants:[]}));
+      }
+      return result;
+    };
+    const r=await f.engine.runOnce();
+    assert.equal(r.written,0);
+    assert.equal(r.conflicts,1);
+    assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  }
 });
