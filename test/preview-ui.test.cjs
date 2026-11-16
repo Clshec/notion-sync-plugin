@@ -155,7 +155,8 @@ function mount(customRows, habitRows) {
     URL,console
   });
   return {els:element,requests,stores,secretWrites,api,imports,updates,existingTasks,
-    habitId,counters,schema,habitSchema,setLogicalDay(day){logicalDay=day;}};
+    sampleRows:customRows||[],habitRows:habitRows||[],habitId,counters,schema,habitSchema,
+    setLogicalDay(day){logicalDay=day;}};
 }
 
 function configure(env) {
@@ -555,6 +556,14 @@ async function setupHabitDay(env,habitId='habit-original-1') {
   env.els('habitOccUnit').value='count';
   env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
   await env.els('save').events.click();
+  // Notion schema and page properties have stable IDs (Notion's official API).
+  for(const [name,prop] of Object.entries(env.schema))
+    prop.id=prop.id||'board-field-'+Object.keys(env.schema).indexOf(name);
+  for(const row of env.sampleRows)
+    for(const [name,prop] of Object.entries(row.properties))
+      if(env.schema[name])prop.id=env.schema[name].id;
+  await env.els('pinHabitProps').events.click();
+  assert.match(env.els('notice').textContent,/Pinned 4 existing habit field IDs/);
   await env.api.persistDataSynced(JSON.stringify({
     version:1,notionId:habitId,spCounterId:'a',notionSourceId:env.habitId
   }), 'alf-habit-definition-link-v1-'+habitId);
@@ -1053,4 +1062,123 @@ test('changed mapping or selected tasks require restaging Notion plan refresh',a
   await env.els('commitPlanBtn').events.click();
   assert.equal(env.updates.length,0);
   assert.match(env.els('notice').textContent,/Notion mapping changed/);
+});
+
+
+test('Notion habit definitions survive English property renames with stable pins',async()=>{
+  const defs=[{object:'page',id:'habit-renamed-1',properties:{
+    'العادة':{type:'title',title:[{plain_text:'Real habit'}]},
+    'التكرار':{type:'select',select:{name:'Daily'}}
+  }}],env=mount(null,defs);
+  await new Promise(resolve=>setImmediate(resolve));
+  env.els('habitSource').value=env.habitId;
+  env.els('habitTitleProp').value='العادة';
+  env.els('habitCadenceProp').value='التكرار';
+  env.els('token').value='ntn_FAKE_SECRET_TOKEN';
+  for(const [name,p] of Object.entries(env.habitSchema)) p.id='habit-property-'+name;
+  for(const row of defs)for(const [name,p] of Object.entries(row.properties))
+    p.id=env.habitSchema[name].id;
+  await env.els('save').events.click();
+  await env.els('pinHabitProps').events.click();
+  assert.match(env.els('notice').textContent,/Pinned 2 existing habit field IDs/);
+  for(const [from,to] of [['العادة','Habit Title'],['التكرار','Frequency']]){
+    env.habitSchema[to]=env.habitSchema[from];delete env.habitSchema[from];
+    defs[0].properties[to]=defs[0].properties[from];delete defs[0].properties[from];
+  }
+  // An unrelated new same-name field must not replace an existing pinned ID.
+  env.habitSchema['العادة']={id:'new-title-id',type:'title'};
+  defs[0].properties['العادة']={id:'new-title-id',type:'title',
+    title:[{plain_text:'Wrong habit'}]};
+  await env.els('previewHabits').events.click();
+  assert.equal(env.els('habitRows').children.length,1);
+  assert.equal(env.els('habitRows').children[0].children[0].textContent,'Real habit');
+  assert.equal(env.els('habitRows').children[0].children[1].textContent,'Daily');
+  env.els('habitRows').children[0].children[2].children[0].value='a';
+  await env.els('saveHabitMappings').events.click();
+  assert.equal(env.stores.filter(x=>x.key==='alf-habit-definition-link-v1-habit-renamed-1').length,1);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('renamed habit occurrence type, day, relation, and Number retain the exact PATCH target',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  const renamed=[
+    ['نوع الصفحة','Item Type'],
+    ['يوم التنفيذ','Work Day'],
+    ['قاعدة العادات','Habit Definition'],
+    ['Habit Count','Daily Count']
+  ];
+  for(const [from,to] of renamed) {
+    env.schema[to]=env.schema[from];delete env.schema[from];
+    rows[0].properties[to]=rows[0].properties[from];delete rows[0].properties[from];
+  }
+  // Reusing the old label must never redirect to an unrelated Number property.
+  env.schema['Habit Count']={id:'replacement-count-id',type:'number'};
+  rows[0].properties['Habit Count']={id:'replacement-count-id',type:'number',number:40};
+  await env.els('previewHabitDay').events.click();
+  assert.match(env.els('habitDayPlan').textContent,/1 → 3 count/);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  const q=env.requests.find(r=>r.opts.method==='POST' && r.opts.body.filter);
+  assert.equal(q.opts.body.filter.and[0].property,env.schema['Item Type'].id);
+  assert.equal(q.opts.body.filter.and[1].property,env.schema['Work Day'].id);
+  env.els('authorizeHabitDay').checked=true;
+  await env.els('pushHabitDay').events.click();
+  const writes=env.requests.filter(r=>r.opts.method==='PATCH');
+  assert.equal(writes.length,1);
+  assert.deepEqual(Object.keys(writes[0].opts.body.properties),[env.schema['Daily Count'].id]);
+  assert.equal(rows[0].properties['Daily Count'].number,3);
+  assert.equal(rows[0].properties['Habit Count'].number,40);
+});
+
+test('replaced pinned habit-day count field fails closed even if old label returns',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  env.schema['Habit Count']={type:'number',id:'replacement-counter-field'};
+  env.els('authorizeHabitDay').checked=true;
+  await env.els('pushHabitDay').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.match(env.els('notice').textContent,/Missing or incompatible existing Notion occurrence property/);
+});
+
+test('changing mapped habit field after pin refuses stale writeback until repinned',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  env.els('habitOccCountProp').value='Habit Count 2';
+  env.els('authorizeHabitDay').checked=true;
+  await env.els('pushHabitDay').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.match(env.els('notice').textContent,/Habit mapping changed/);
+});
+
+test('mutated SP habit-to-counter ID link since preview refuses habit-day write',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  await env.api.persistDataSynced(JSON.stringify({
+    version:1,notionId:'habit-original-1',spCounterId:'b',notionSourceId:env.habitId
+  }),'alf-habit-definition-link-v1-habit-original-1');
+  env.els('authorizeHabitDay').checked=true;
+  await env.els('pushHabitDay').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.match(env.els('habitDayReport').textContent,/Habit counter link changed since preview/);
+});
+
+test('habit-day writeback refuses unpinned property mapping without Notion writes',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('habitSource').value=env.habitId;
+  env.els('habitOccTypeProp').value='نوع الصفحة';
+  env.els('habitOccTypeValue').value='عادة';
+  env.els('habitOccRelationProp').value='قاعدة العادات';
+  env.els('habitOccDayProp').value='يوم التنفيذ';
+  env.els('habitOccCountProp').value='Habit Count';
+  env.els('habitOccUnit').value='count';
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewHabitDay').events.click();
+  assert.match(env.els('notice').textContent,/Pin stable occurrence property IDs/);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
 });
