@@ -76,7 +76,12 @@ function mount(customRows, habitRows) {
       existingTasks.push({id, ...task});
       return id;
     },
-    async updateTask(id,fields) {updates.push({id,fields});},
+    async updateTask(id,fields,options) {
+      updates.push({id,fields,options});
+      const task=existingTasks.find(t=>t.id===id);
+      if(!task)throw new Error('SP task not found');
+      Object.assign(task,fields);
+    },
     async request(url, opts) {
       requests.push({url,opts});
       assert.equal(new URL(url).host, 'api.notion.com');
@@ -904,4 +909,148 @@ test('deleting pinned observer Number property prevents any write',async()=>{
   await env.els('pushObservedPomoBtn').events.click();
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
   assert.match(env.els('notice').textContent,/Notion source or pinned property changed/);
+});
+
+
+function planningTestPage() {
+  return {object:'page',id:'plan-n1',properties:{
+    'المصدر':{type:'title',title:[{plain_text:'Original task plan'}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'مهمة'}]},
+    'يوم التنفيذ':{type:'date',date:{start:'2026-11-16'}},
+    'الوقت المخطط له':{type:'number',number:1},
+    'Status':{type:'status',status:{name:'In progress'}}
+  }};
+}
+async function setupPlanRefresh(env,rows) {
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('token').value='ntn_FAKE_PLAN_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  env.els('targetSpProject').value='projectX';
+  env.els('authorizeImport').checked=true;
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1);
+  const task=env.existingTasks.at(-1);
+  task.timeSpent=42*60000;
+  rows[0].properties['المصدر'].title=[{plain_text:'Notion updated plan #tag'}];
+  rows[0].properties['الوقت المخطط له'].number=2;
+  rows[0].properties['يوم التنفيذ'].date={start:'2026-11-17'};
+  await env.els('previewBtn').events.click();
+  env.els('results').children[0].children[0].children[0].checked=true;
+  return task;
+}
+test('Notion plan refresh stages title, estimate and due day, then needs separate consent',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/1 linked SP task planning updates/);
+  assert.match(env.els('planRefreshDiff').textContent,/title/);
+  assert.match(env.els('planRefreshDiff').textContent,/timeEstimate/);
+  assert.match(env.els('planRefreshDiff').textContent,/dueDay/);
+  assert.equal(env.updates.length,0);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  await env.els('commitPlanBtn').events.click();
+  assert.equal(env.updates.length,0);
+  assert.match(env.els('notice').textContent,/Explicitly authorize/);
+  env.els('authorizePlanRefresh').checked=true;
+  await env.els('commitPlanBtn').events.click();
+  assert.equal(env.updates.length,1);
+  assert.deepEqual(env.updates[0].options,{isIgnoreShortSyntax:true});
+  assert.deepEqual(Object.keys(env.updates[0].fields).sort(),
+    ['title','timeEstimate','dueDay'].sort());
+  assert.equal(task.title,'Notion updated plan #tag');
+  assert.equal(task.timeEstimate,7200000);
+  assert.equal(task.dueDay,'2026-11-17');
+  assert.equal(task.timeSpent,42*60000,'execution actual time is not overwritten');
+  assert.equal(task.isDone,false,'SP execution status remains SP-owned');
+  assert.equal(task.projectId,'projectX');
+  assert.equal(task.notes,'alf-notion-page-id:plan-n1');
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.equal(env.els('authorizePlanRefresh').checked,false);
+  await env.els('commitPlanBtn').events.click();
+  assert.equal(env.updates.length,1,'no replays without restaging');
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/0 linked SP task planning updates/);
+});
+
+test('Notion changes after staging block SP changes',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  await setupPlanRefresh(env,rows);
+  await env.els('stagePlanBtn').events.click();
+  rows[0].properties['الوقت المخطط له'].number=3;
+  env.els('authorizePlanRefresh').checked=true;
+  await env.els('commitPlanBtn').events.click();
+  assert.equal(env.updates.length,0);
+  assert.match(env.els('planRefreshReport').textContent,/Notion plan changed after review/);
+});
+test('SP local title edits after staging are preserved and conflict is reported',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  await env.els('stagePlanBtn').events.click();
+  task.title='Local offline edit';
+  env.els('authorizePlanRefresh').checked=true;
+  await env.els('commitPlanBtn').events.click();
+  assert.equal(env.updates.length,0);
+  assert.equal(task.title,'Local offline edit');
+  assert.match(env.els('planRefreshReport').textContent,/SP field edited after review/);
+});
+test('Notion blank estimated time and empty due date do not clear SP planning fields',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  rows[0].properties['الوقت المخطط له'].number=null;
+  rows[0].properties['يوم التنفيذ'].date=null;
+  task.title='Notion updated plan #tag';
+  await env.els('previewBtn').events.click();
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/0 linked SP task planning updates/);
+  assert.equal(task.timeEstimate,3600000);
+  assert.equal(task.dueDay,'2026-11-16');
+  assert.equal(env.updates.length,0);
+});
+test('completed and recurring SP tasks never get Notion planning updates',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  task.isDone=true;
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/0 linked SP task planning updates/);
+  task.isDone=false;task.repeatCfgId='repeat-1';
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/0 linked SP task planning updates/);
+  assert.equal(env.updates.length,0);
+});
+test('Notion timed execution date updates SP timestamp and clears obsolete date-only field',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  rows[0].properties['يوم التنفيذ'].date={start:'2026-11-17T17:30:00+02:00'};
+  await env.els('previewBtn').events.click();
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('stagePlanBtn').events.click();
+  env.els('authorizePlanRefresh').checked=true;
+  await env.els('commitPlanBtn').events.click();
+  assert.equal(env.updates.length,1);
+  assert.equal(task.dueDay,null);
+  assert.equal(task.dueWithTime,Date.parse('2026-11-17T15:30:00Z'));
+});
+test('subtask identity changes after staging block Notion plan writeback to wrong SP task',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  await env.els('stagePlanBtn').events.click();
+  task.parentId='new-parent-task';
+  env.els('authorizePlanRefresh').checked=true;
+  await env.els('commitPlanBtn').events.click();
+  assert.equal(env.updates.length,0);
+  assert.match(env.els('planRefreshReport').textContent,/Task identity\/status changed/);
+});
+test('changed mapping or selected tasks require restaging Notion plan refresh',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  await setupPlanRefresh(env,rows);
+  await env.els('stagePlanBtn').events.click();
+  env.els('unit').value='minutes';
+  env.els('authorizePlanRefresh').checked=true;
+  await env.els('commitPlanBtn').events.click();
+  assert.equal(env.updates.length,0);
+  assert.match(env.els('notice').textContent,/Notion mapping changed/);
 });
