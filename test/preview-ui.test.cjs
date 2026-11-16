@@ -1432,7 +1432,7 @@ test('automatic habit-day export requires separate consent and a current pinned 
 });
 
 test('changing SP logical day after habit preview refuses enabling auto habit export',async()=>{
-  const rows=[habitOccurrence()],env=mount(rows);
+  const rows=[habitOccurrence('habit-original-1','habit-occ-1',0)],env=mount(rows);
   await setupHabitDay(env);
   await env.els('previewHabitDay').events.click();
   env.setLogicalDay('2026-11-17');
