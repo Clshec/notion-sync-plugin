@@ -135,6 +135,12 @@ code {font:inherit;white-space:nowrap}
   </div>
   <p id="timeReport" role="status" aria-live="polite" class="muted"></p>
 </section>
+<section>
+  <h2>6. Observed focus sessions (read-only report)</h2>
+  <p>Alf records only future focus-session starts and completions observed while the plugin is active. Unknown mode/task, interrupted, or ambiguous sessions are excluded. A verified automatic Pomodoro completion counts once by session ID; manually ended sessions do not count as completed Pomodoros. Historical sessions cannot be backfilled. This report does not write anything to Notion.</p>
+  <div class="actions"><button id="loadSessions">Read locally observed focus sessions</button></div>
+  <pre id="focusReport" style="white-space:pre-wrap;max-height:270px;overflow:auto"></pre>
+</section>
 <footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release does not synchronize any changes.</footer>
 </main>
 <script>
@@ -683,6 +689,61 @@ code {font:inherit;white-space:nowrap}
     finally {busy(false);}
   }
 
+
+  async function showFocusSessions() {
+    if (active) return;
+    busy(true);
+    try {
+      if (typeof PluginAPI.listSyncedDataKeys!=='function')
+        throw new Error('Super Productivity does not expose listSyncedDataKeys; upgrade SP to use focus reports');
+      var keys=await PluginAPI.listSyncedDataKeys('alf-focus-observed-v1-');
+      if (!Array.isArray(keys)) throw new Error('Unexpected plugin data keys response');
+      // Each key holds one observed session. Never sum totals on DATA_CHANGED:
+      // repeated sync deliveries are not new focus sessions.
+      var unique=new Map(),unknown=0;
+      for (var key of keys.slice(0,2000)) {
+        if (typeof key!=='string' || !key.startsWith('alf-focus-observed-v1-')) continue;
+        var raw=await PluginAPI.loadSyncedData(key);
+        if (!raw) continue;
+        try {
+          var event=JSON.parse(raw);
+          if (event.schemaVersion!==1 || !event.sessionId ||
+              key!=='alf-focus-observed-v1-'+event.sessionId ||
+              !event.taskId || !['Pomodoro','Flowtime','Countdown'].includes(event.mode)) {
+            unknown++;continue;
+          }
+          unique.set(event.sessionId,event);
+        } catch(e) {unknown++;}
+      }
+      var perTask=new Map(),verified=0,observed=0;
+      for (var row of unique.values()) {
+        var item=perTask.get(row.taskId) || {total:0,pomodoro:0,flowtime:0,countdown:0};
+        item.total++;
+        if (row.mode==='Flowtime') item.flowtime++;
+        if (row.mode==='Countdown') item.countdown++;
+        if (row.verifiedCompletedPomodoro === true && row.mode==='Pomodoro') {
+          item.pomodoro++;verified++;
+        }
+        observed++;
+        perTask.set(row.taskId,item);
+      }
+      ui('focusReport').textContent=
+        'Observed finished sessions: '+observed+
+        '\nVerified automatically completed Pomodoros: '+verified+
+        '\nOther records skipped: '+unknown+
+        (keys.length>2000?'\nShowing first 2000 synced keys only.':'')+
+        '\n\n'+Array.from(perTask.entries()).map(function(pair){
+          var t=pair[1];
+          return 'SP task '+pair[0]+' → '+t.pomodoro+' verified Pomodoros; '+
+            t.flowtime+' Flowtime endings; '+t.countdown+' Countdown endings ('+
+            t.total+' observed total)';
+        }).join('\n')+
+        '\n\nNo Notion fields were updated. Old sessions and missing data remain unknown.';
+      message('Read-only focus-session report loaded. No Notion or SP work records were modified.');
+    } catch(e) {fail(e);}
+    finally {busy(false);}
+  }
+
   async function init() {
     try {
       var saved=await PluginAPI.loadSyncedData(CFG_KEY);
@@ -701,6 +762,7 @@ code {font:inherit;white-space:nowrap}
     ui('importBtn').addEventListener('click',importChecked);
     ui('planTimeBtn').addEventListener('click',stageActualTime);
     ui('pushTimeBtn').addEventListener('click',commitActualTime);
+    ui('loadSessions').addEventListener('click',showFocusSessions);
     try {
       var projects=await PluginAPI.getAllProjects();
       var selector=ui('targetSpProject');

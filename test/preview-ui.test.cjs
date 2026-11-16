@@ -141,7 +141,9 @@ test('manifest declares only Notion HTTP host and per-device secret API', () => 
   assert.ok(manifest.permissions.includes('getSecret'));
   assert.ok(manifest.permissions.includes('setSecret'));
   assert.equal(manifest.id, 'alf-notion-super-productivity');
-  assert.ok(!host.includes('registerHook('), 'no background hooks in preview');
+  assert.ok(host.includes('PluginAPI.Hooks.ACTION'), 'live focus events use host API');
+  assert.ok(host.includes('PluginAPI.Hooks.CURRENT_TASK_CHANGE'), 'task identity hook enabled');
+  assert.ok(!host.includes('PluginAPI.request('), 'host background code never calls Notion API');
   assert.ok(!host.includes('updateTask('), 'no SP writes');
   assert.ok(!host.includes('fetch('), 'no unguarded network calls');
 });
