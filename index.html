@@ -745,7 +745,7 @@ code {font:inherit;white-space:nowrap}
   }
   function exactlyLinkedTaskMarker(task,pageId) {
     return !!task && typeof task.notes==='string' &&
-      task.notes.split(/\\s+/).includes(notionPageMarker(pageId));
+      task.notes.split(/\s+/).includes(notionPageMarker(pageId));
   }
   function safePlanTask(task,pageId) {
     if(!task || !exactlyLinkedTaskMarker(task,pageId))return false;
@@ -800,14 +800,14 @@ code {font:inherit;white-space:nowrap}
         selection:selected.map(function(page){return page.id;}).sort().join(','),
         updates:updates};
       ui('planRefreshDiff').textContent=
-        updates.length+' linked SP task planning updates (NOT applied).\\n'+
+        updates.length+' linked SP task planning updates (NOT applied).\n'+
         updates.map(function(entry){
           return entry.notionId+' → '+entry.spId+': '+
             Object.keys(entry.after).map(function(key){
               return key+' '+String(entry.before[key])+' → '+String(entry.after[key]);
             }).join('; ');
-        }).join('\\n')+(skips.length?'\\nSkipped:\\n'+skips.join('\\n'):'')+
-        '\\nOnly title, estimate and execution date can change. No Notion writes.';
+        }).join('\n')+(skips.length?'\nSkipped:\n'+skips.join('\n'):'')+
+        '\nOnly title, estimate and execution date can change. No Notion writes.';
       message('Notion-owned planning changes staged locally; no tasks or Notion data modified.');
     }catch(e){fail(e);}
     finally{busy(false);}
