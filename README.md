@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.3 experimental read-only Notion preview with explicitly authorized manual SP task import. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.4 experimental Notion preview, manually confirmed SP task import, and manually confirmed SP actual-time writeback to Notion. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -12,20 +12,21 @@ There must be **no requirement to create new Notion databases**. Existing proper
 
 The inherited upstream alpha used fixed English property names and unsafe writes. This fork has **removed the old write engine** and replaced it with an opt-in read-only preview, but has not validated a production integration. It also does **not** provide accurate per-task completed Pomodoro session history via the official Plugin API.
 
-**No automatic sync or Notion write capability exists in the current fork. Manual SP task import is separately gated; only test with a disposable Notion integration and local SP data until the end-to-end verification phase finishes.**
+**There is no automatic sync. Manual SP import and separate Notion Actual Time Number writeback are opt-in actions with distinct confirmation checkboxes. Test only against disposable Notion and SP data until the integration verification phase finishes.**
 
 An inherited test document contained an integration credential that has been removed from the current default-branch file. It remains potentially exposed in Git history. **Revoke/rotate the affected Notion integration credential immediately.** See [SECURITY.md](SECURITY.md). Never commit secrets.
 
-## Current v0.3 workflow (PRs #2–#3)
+## Current v0.4 workflow (PRs #2–#4)
 
-The fork now contains a **functional, opt-in read path plus manual SP task creation**, not an automatic sync engine:
+The fork now contains **read-only Notion exploration, explicit SP task import, and explicit tracked-time export**, not an automatic synchronization engine:
 
 1. Install into an isolated test instance of Super Productivity **20.0.0+** (Desktop or Android). The installed plugin must be packaged with the root `manifest.json`, `plugin.js`, `index.html`, icon, and license; no ZIP release is published yet.
 2. Open **Alf Notion**, enter an internal Notion integration token (per-device, local secret storage). Do not reuse an exposed integration token.
 3. Paste the **data source ID** of your existing Notion Tasks source. A database ID is not interchangeable. The Notion integration must be shared with that source.
 4. Map existing Title and item-type property labels, and give the exact allowed task and bundle values. Other fields are optional and checked against existing types.
 5. Choose **Inspect existing data source schema** (Notion GET), then **Preview matching tasks**. The preview queries Notion pages using the **2026-03-11** API and reads SP active tasks for counts. It shows up to 75 matched rows and scans up to 300 pages per click.
-6. **The preview itself never writes.** For an optional **manual import**, select individual task rows, choose an existing SP Project, tick the explicit authorization checkbox, then press the separate SP import action. Only then can SP tasks be created, with parent bundles first and unresolved subtasks skipped rather than flattened. No Notion API writes are used. The importer embeds a Notion ID in task notes, stores per-page links via keyed sync state and checks active/archived SP tasks to avoid retries duplicating tasks. Do not start simultaneous imports from multiple devices.
+6. **The preview itself never writes.** For an optional **manual import**, select individual task rows, choose an existing SP Project, tick the explicit authorization checkbox, then press the separate SP import action. Only then can SP tasks be created, with parent bundles first and unresolved subtasks skipped rather than flattened. No Notion API writes occur during import. The importer embeds a Notion ID in task notes, stores per-page links via keyed sync state and checks active/archived SP tasks to avoid retries duplicating tasks. Do not start simultaneous imports from multiple devices.
+7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
 
@@ -37,7 +38,7 @@ Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSync
 - Title, planned estimate, execution date/time, separate deadline, completion status and priority can be mapped from user-selected existing properties. `timeSpent` is **not** imported from Notion because actual work originates from SP.
 - Each Notion task has a keyed mapping and a Notion page ID marker in SP task notes to help recover safely after crashes and avoid duplicate imports.
 - Simultaneous manual import on multiple devices is not transactionally safe yet. Do not install this experimental build into a valuable SP profile.
-- A true bidirectional conflict resolver, automatic project association, time export to Notion, and exact Pomodoro counts remain future PRs.
+- A true bidirectional conflict resolver, automatic project association, **automatic** time sync, and exact Pomodoro counts remain future PRs.
 
 ### Architectural constraints
 - Existing Notion sources are reused, no new Notion database or properties are created.
@@ -49,6 +50,7 @@ Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSync
 
 - [Architecture / authority / safety and Pomodoro API gap](docs/architecture/alf-sync.md)
 - [Field mapping: execution date, deadline, estimate, actual time, status, habits](docs/architecture/field-mapping.md)
+- [Safeguards for manual actual time SP → Notion](docs/architecture/time-writeback.md)
 - [Prioritized work / proposed GitHub Issues](docs/roadmap/ISSUES.md)
 - [Security policy](SECURITY.md)
 
