@@ -1,233 +1,58 @@
-# 🔄 Notion Sync Plugin for Super Productivity
+# Alf Notion Super Productivity
 
-> ⚠️ **ALPHA VERSION - IN TESTING** ⚠️
->
-> This plugin is currently in **alpha testing phase**. While functional, it may contain bugs and the API may change.
-> Please **backup your data** before use and report any issues you encounter.
->
-> **Not recommended for production workflows yet.**
+**Status: EARLY FOUNDATION / NOT READY FOR INSTALLATION OR PRODUCTION SYNC.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
-A powerful bidirectional synchronization plugin that seamlessly connects your Super Productivity tasks with Notion databases, enabling real-time workflow integration between both platforms.
+## Why this fork exists
 
-## ✨ Key Features
+**Notion is the planning authority and long-term record; Super Productivity is the fast, local-first execution tool** for Desktop and Android. The goal is to preserve existing Notion databases and their relations while using SP's tasks, parent/subtasks, habits, day planning, time estimates, tracking and Pomodoro/Flowtime/Countdown modes.
 
-- **🔄 Bidirectional Sync**: Keep tasks synchronized between Super Productivity and Notion in real-time
-- **⚡ Auto-Sync**: Configurable automatic synchronization (5min/10min/15min/30min/1hr/2hr/Never)
-- **🎯 Manual Sync**: On-demand synchronization via header button with progress feedback
-- **🔧 Smart Discovery**: Automatically discovers Notion databases by analyzing titles and schemas
-- **📊 Rich Data Mapping**: Comprehensive property mapping between SP tasks and Notion pages
-- **🎨 Intuitive UI**: Clean configuration interface with real-time status indicators
-- **🛡️ Robust Error Handling**: Rate limiting, retry logic, and clear user feedback
-- **💾 Data Persistence**: Secure local storage with import/export capabilities
+There must be **no requirement to create new Notion databases**. Existing properties can be mapped to SP fields through a future general configuration UI. Optional missing properties may be added only after user approval. The plugin must remain reusable by any Notion user, not tied to a particular workspace.
 
-## 🚀 Quick Setup
+## Important safety notice
 
-### Prerequisites
+The inherited alpha runtime currently uses hard-coded English Notion database properties, creates/updates Notion pages under assumptions not valid for general-purpose data sources, and previously placed the Notion token inside synchronized configuration. It also does **not** provide accurate per-task completed Pomodoro session history via the official Plugin API.
 
-- **Super Productivity** v14.0.0 or higher
-- **Notion workspace** with database creation permissions
-- **Notion integration** with API access
+**Do not install this fork against valuable existing Notion workspaces or enable automatic sync until the refactor and safe preview tests are completed.**
 
-### Installation Steps
+An inherited test document contained an integration credential that has been removed from the current default-branch file. It remains potentially exposed in Git history. **Revoke/rotate the affected Notion integration credential immediately.** See [SECURITY.md](SECURITY.md). Never commit secrets.
 
-1. **Create Notion Integration**
-   - Visit [notion.so/my-integrations](https://notion.so/my-integrations)
-   - Click "New integration"
-   - Give it a name (e.g., "Super Productivity Sync")
-   - Copy the **API key** (starts with `ntn_`)
+## Architecture and design contracts
 
-2. **Setup Notion Database**
-   - Create a new database in Notion for your tasks
-   - Share the database with your integration (Edit permissions required)
-   - Copy the **database ID** from the URL
+- [Architecture / authority / safety and Pomodoro API gap](docs/architecture/alf-sync.md)
+- [Field mapping: execution date, deadline, estimate, actual time, status, habits](docs/architecture/field-mapping.md)
+- [Prioritized work / proposed GitHub Issues](docs/roadmap/ISSUES.md)
+- [Security policy](SECURITY.md)
 
-3. **Install Plugin**
-   - Download/copy the plugin folder to your Super Productivity plugins directory
-   - Go to **Settings → Plugins**
-   - Enable "Notion Sync Plugin"
+### Core mappings
 
-4. **Configure Plugin**
-   - Click the plugin icon in the side panel
-   - Enter your **Notion API key** and **Tasks Database ID**
-   - Set **auto-sync interval** (default: 10 minutes)
-   - Click **"Test Connection"** to verify setup
-   - Click **"Save Configuration"**
+| Notion planned information | Super Productivity |
+|---|---|
+| Existing project relation | Project |
+| Existing task item | Task |
+| Bundle and bundle-parent relation | Parent task + Subtask |
+| Execution day / scheduled time | `dueDay` / `dueWithTime` |
+| **Independent deadline** | `deadlineDay` / `deadlineWithTime` |
+| Estimated work | `timeEstimate` (milliseconds) |
+| Work logged | `timeSpent` / `timeSpentOnDay` |
+| Planned Pomodoro target | derived from time estimate and configurable work interval |
+| Real completed Pomodoros | requires reliable completed-session API/event source |
+| Habit definition / day record | SP Habit Tracker / SimpleCounters |
 
-### First Sync
+### Time and Pomodoro policy
 
-1. Use the **"Sync Notion"** header button for immediate sync
-2. Existing tasks will be synchronized between both platforms
-3. Auto-sync will continue running based on your configured interval
+SP focus and timer work happen locally. Notion receives actual work/verified sessions and preserves its independent plan. Breaks must not count as focus time; completed Pomodoros cannot be computed from rounded total hours. The upstream API currently lacks a cross-platform per-task/per-mode focus-session history interface. Until fixed, **focus-session synchronization is planned, not implemented**.
 
-## ⚙️ Configuration Options
+### Multi-device
 
-### Connection Settings
+The plugin will use SP's native SuperSync data mechanism without replacing or interfering with it. Plugin **code** must be installed on each device separately; tokens are device-local, not stored with synchronized plugin configuration. All remotely observed updates must be idempotent to avoid duplication.
 
-| Setting | Required | Description |
-|---------|----------|-------------|
-| **API Key** | Yes | Your Notion integration API key (starts with `ntn_`) |
-| **Tasks Database ID** | Yes | The UUID of your Notion tasks database |
-| **Projects Database ID** | No | Optional database for syncing SP projects |
+## Development workflow
 
-### Sync Settings
+- Base branch: `main`; feature work: dedicated branches and GitHub Pull Requests.
+- Do not merge code without safe mapping, credential isolation and integration tests.
+- Github Issues are currently disabled on the fork; enable in repository Settings → General → Features → Issues to turn [the backlog](docs/roadmap/ISSUES.md) into live Issues.
+- For the current inherited alpha runtime details, inspect `plugin.js`, `index.html`, and `manifest.json`. These are **not yet evidence of a working Alf integration**.
 
-| Setting | Options | Default | Description |
-|---------|---------|---------|-------------|
-| **Auto-Sync Interval** | Never/5min/10min/15min/30min/1hr/2hr | Never | Automatic sync frequency |
-| **Enable Logging** | Yes/No | Yes | Enable detailed console logging |
+## License and provenance
 
-### Manual Controls
-
-- **Test Connection**: Verify API credentials and database access
-- **Discover Databases**: Auto-find databases by analyzing titles and schemas
-- **Export/Import Configuration**: Backup and restore plugin settings
-- **Manual Sync**: Trigger immediate sync via header button
-
-## 📋 Required Notion Database Schema
-
-Your Notion database must have these properties for full functionality:
-
-### Required Properties
-
-- **Name** (Title) - Task title
-- **SP Task ID** (Rich Text) - Super Productivity task identifier
-- **Complete** (Checkbox) - Task completion status
-- **Status** (Status) - Alternative completion tracking
-- **Scheduling** (Date) - Planned date/time
-- **Time Estimate** (Number) - Estimated hours
-- **Time Spent** (Number) - Actual hours spent
-- **Task Type** (Multi-select) - Task categories/tags
-
-
-> 💡 **Auto-Discovery**: The plugin can automatically find databases that match common naming patterns (tasks, todo, projects, etc.) and verify they have the required schema.
-
-## 🗺️ Data Mapping
-
-### Super Productivity → Notion
-
-| SP Property | Notion Property | Type | Notes |
-|-------------|-----------------|------|-------|
-| `title` | Name | Title | Task title |
-| `notes` | Notes | Rich Text | Task description |
-| `isDone` | Complete | Checkbox | Primary completion status |
-| `isDone` | Status | Status | Alternative completion indicator |
-| `priority` | Priority | Select | URGENT/HIGH/MEDIUM/LOW |
-| `timeEstimate` | Time Estimate | Number | Converted from ms to hours |
-| `timeSpent` | Time Spent | Number | Converted from ms to hours |
-| `plannedAt` | Scheduling | Date | Planned date/time |
-| `projectId` | Projects | Relation | Project assignment |
-| `tagIds` | Task Type | Multi-select | Tag assignments |
-| `id` | SP Task ID | Rich Text | Sync mapping identifier |
-
-### Notion → Super Productivity
-
-The reverse mapping automatically converts Notion page properties back to SP task format with proper type validation and null handling.
-
-## 🔧 Plugin Architecture
-
-### File Structure
-
-```
-notion-sync-plugin/
-├── manifest.json          # Plugin metadata and permissions
-├── plugin.js             # Main plugin logic and background operations
-├── index.html            # UI interface and configuration
-├── icon.svg              # Plugin icon
-├── README.md             # This documentation
-└── docs/                 # Additional documentation
-    ├── notion-database-structure.md
-    ├── sync-workflow.md
-    ├── plugin-architecture.md
-    ├── configuration-guide.md
-    └── troubleshooting.md
-```
-
-### Core Components
-
-1. **plugin.js**: Background sync engine, hooks, and API integration
-2. **index.html**: User interface for configuration and monitoring
-3. **Persistent Data API**: Secure storage using Super Productivity's data persistence
-4. **Auto-sync Engine**: Configurable timer-based sync with rate limiting
-5. **Manual Sync**: Header button for immediate synchronization
-
-### Key Features Implementation
-
-- **Header Button**: `PluginAPI.registerHeaderButton()` for manual sync
-- **Auto-sync Timer**: Configurable intervals with rate limiting (5-second minimum)
-- **Configuration Monitoring**: Automatic detection of config changes
-- **Error Handling**: Comprehensive error catching with user feedback
-
-## 🛠️ Troubleshooting
-
-### Common Issues
-
-**Connection Failed**
-- Verify API key is correct and starts with `ntn_`
-- Ensure database is shared with your integration (Edit permissions)
-- Check database ID format (should be a UUID)
-- Test network connectivity
-
-**Sync Not Working**
-- Check if auto-sync interval is set to "Never"
-- Verify required properties exist in Notion database
-- Review browser console for error messages
-- Try manual sync first to isolate issues
-
-**Missing Data**
-- Ensure all optional properties exist in Notion database
-- Check property types match expected format (Title, Rich Text, etc.)
-- Verify database has correct permissions
-
-**Performance Issues**
-- Reduce auto-sync frequency
-- Check for large numbers of tasks (1000+ may be slow)
-- Disable logging in production use
-- Monitor network connection stability
-
-### Debug Mode
-
-Enable detailed logging by checking "Enable Logging" in the plugin configuration. This will show:
-- API requests and responses
-- Data mapping operations
-- Sync statistics and timing
-- Error details and stack traces
-
-## 🚀 Roadmap
-
-### Planned Features
-
-- **🔄 Subtask Support**: Sync nested tasks and subtasks
-- **📁 Multiple Databases**: Support for multiple Notion databases
-- **⚡ Real-time Sync**: WebSocket/webhook integration for instant updates
-
-### Known Limitations
-
-- Large datasets (1000+ tasks) may sync slowly
-- Complex nested data structures not fully supported
-- Manual conflict resolution required for simultaneous edits
-- Network connectivity issues may cause sync delays
-
-## 📞 Support
-
-### Getting Help
-
-1. **Check Documentation**: Review this README and docs/ folder
-2. **Enable Debug Logging**: Turn on logging to see detailed operation info
-3. **Test Components**: Use "Test Connection" and manual sync to isolate issues
-4. **Report Issues**: Create detailed bug reports with steps to reproduce
-
-### Bug Reports Should Include
-
-- Super Productivity version
-- Plugin version
-- Operating system
-- Browser (if web version)
-- Steps to reproduce
-- Error messages from console
-- Configuration (without API key)
-
----
-
-**⚠️ Alpha Notice**: This plugin is under active development. Features may change, and bugs are expected. Please backup your data and use with caution in production workflows.
-
-**📧 Feedback**: Issues and feedback are welcome! Please test thoroughly and report any problems you encounter.
+MIT — see [LICENSE](LICENSE), including the original 2025 copyright for Alessio Lovato. Contributions to this fork retain that notice.
