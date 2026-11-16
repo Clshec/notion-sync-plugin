@@ -79,6 +79,9 @@ code {font:inherit;white-space:nowrap}
     <label>Deadline property (Date, optional) <input id="deadlineProp" placeholder="e.g. Deadline"></label>
     <label>Estimated time property (Number) <input id="estimateProp" placeholder="e.g. Planned Time / الوقت المخطط له"></label>
     <label>Actual tracked time property (Number) <input id="actualProp" placeholder="e.g. Actual Time / الوقت الفعلي"></label>
+    <label>Observed Pomodoros — PARTIAL lower-bound property (existing Number, optional)
+      <input id="observedPomoProp" placeholder="e.g. Observed Pomodoros (partial); NOT Completed Pomodoros">
+    </label>
     <label>Status property (Status or Select) <input id="statusProp" placeholder="e.g. Status"></label>
     <label>Status names indicating completion (comma separated; optional)
       <input id="completedValues" placeholder="e.g. Done, Completed"></label>
@@ -145,6 +148,17 @@ code {font:inherit;white-space:nowrap}
   <p>Alf records only future focus-session starts and completions observed while the plugin is active. Unknown mode/task, interrupted, or ambiguous sessions are excluded. A verified automatic Pomodoro completion counts once by session ID; manually ended sessions do not count as completed Pomodoros. Historical sessions cannot be backfilled. This report does not write anything to Notion.</p>
   <div class="actions"><button id="loadSessions">Read observed focus sessions and compare to the task preview (NO WRITES)</button></div>
   <pre id="focusReport" style="white-space:pre-wrap;max-height:270px;overflow:auto"></pre>
+  <h2 style="margin-top:18px">Optional writeback: observed Pomodoros lower bound ONLY</h2>
+  <p><strong>Never use your official Completed Pomodoros field here.</strong> Map a separate existing Number property explicitly labeled as a <em>partial observed minimum</em> above. This observer misses historical/offline/background sessions. Only verified automatic Pomodoro completions already recorded by the active plugin qualify; counts are cumulative per SP task, not daily. No missing Notion field or database is created.</p>
+  <p class="muted">First pin stable task property IDs and preview matching Notion tasks; select rows above. A separate review and authorization is needed on every attempt. The value only increases, and writeback refuses missing/ambiguous links, stale observation snapshots, changed Notion properties, or more than 2,000 observer records.</p>
+  <div class="actions"><button id="previewObservedPomoBtn">Review observed Pomodoro minimum → existing Notion rows (NO WRITES)</button></div>
+  <pre id="observedPomoPlan" style="white-space:pre-wrap;max-height:260px;overflow:auto"></pre>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeObservedPomo" type="checkbox" style="width:auto">
+    <span>I understand this is an incomplete <strong>observed minimum</strong>, not the actual total. I authorize updating only the reviewed existing Number properties.</span>
+  </label>
+  <div class="actions"><button id="pushObservedPomoBtn">Write reviewed observed minimum to Notion (manual only)</button></div>
+  <p id="observedPomoReport" role="status" aria-live="polite" class="muted"></p>
 </section>
 <section>
   <h2>7. Notion habit definitions ↔ existing SP Habit Tracker</h2>
@@ -203,14 +217,15 @@ code {font:inherit;white-space:nowrap}
   var stagedTimeChanges = null;
   var habitPreview = null;
   var stagedHabitDay = null;
+  var stagedObservedPomo = null;
   var taskPropertyBindings = {};
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
-    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','pomodoroWorkMinutes','habitTitleProp','habitCadenceProp','habitOccTypeProp','habitOccTypeValue','habitOccRelationProp','habitOccDayProp','habitOccCountProp','habitOccUnit'];
+    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','observedPomoProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','pomodoroWorkMinutes','habitTitleProp','habitCadenceProp','habitOccTypeProp','habitOccTypeValue','habitOccRelationProp','habitOccDayProp','habitOccCountProp','habitOccUnit'];
   var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
-    deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],
+    deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],observedPomoProp:['number'],
     statusProp:['status','select'],priorityProp:['select'],projectProp:['relation'],parentProp:['relation']};
   var ui = function (id) { return document.getElementById(id); };
   var active = false;
@@ -228,7 +243,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','planTimeBtn','pushTimeBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -348,7 +363,7 @@ code {font:inherit;white-space:nowrap}
         taskPropertyBindings:next
       })),CFG_KEY);
       taskPropertyBindings=next;
-      lastPreviewConfig=null;stagedTimeChanges=null;stagedHabitDay=null;
+      lastPreviewConfig=null;stagedTimeChanges=null;stagedHabitDay=null;stagedObservedPomo=null;
       ui('authorizeTime').checked=false;
       message('Pinned '+count+' stable task property IDs in synced plugin metadata only. Rename-safe for these fields. Re-run task preview; Notion was not changed.');
     }catch(e){fail(e);}
@@ -426,6 +441,9 @@ code {font:inherit;white-space:nowrap}
     lastPreviewConfig = null;
     lastVisibleRows = [];
     stagedTimeChanges = null;
+    stagedObservedPomo = null;
+    ui('authorizeObservedPomo').checked = false;
+    ui('observedPomoPlan').textContent = '';
     ui('timePlan').textContent = '';
     ui('results').replaceChildren();
     try {
@@ -1210,6 +1228,8 @@ code {font:inherit;white-space:nowrap}
     ui('planTimeBtn').addEventListener('click',stageActualTime);
     ui('pushTimeBtn').addEventListener('click',commitActualTime);
     ui('loadSessions').addEventListener('click',showFocusSessions);
+    ui('previewObservedPomoBtn').addEventListener('click',stageObservedPomodoros);
+    ui('pushObservedPomoBtn').addEventListener('click',commitObservedPomodoros);
     ui('previewHabits').addEventListener('click',previewHabitDefinitions);
     ui('saveHabitMappings').addEventListener('click',saveHabitMappings);
     ui('previewHabitDay').addEventListener('click',stageHabitDay);
