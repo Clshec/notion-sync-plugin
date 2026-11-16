@@ -105,7 +105,7 @@ function mount(customRows, habitRows) {
         const name=Object.keys(page.properties).find(n=>n===idOrName ||
           (page.properties[n] && page.properties[n].id===idOrName));
         assert.ok(name==='الوقت الفعلي'||name==='Habit Count'||name==='Actual Time'||
-          name==='Observed Pomodoros (partial)',
+          name==='Observed Pomodoros (partial)'||name==='Daily Count',
           'Patch only an approved existing numeric field or its stable ID');
         assert.ok(typeof field.number==='number');
         page.properties[name]={...page.properties[name],type:'number',number:field.number};
@@ -590,8 +590,8 @@ test('habit-day write requires independent explicit confirmation and patches onl
   await env.els('pushHabitDay').events.click();
   const patch=env.requests.filter(r=>r.opts.method==='PATCH');
   assert.equal(patch.length,1);
-  assert.deepEqual(Object.keys(patch[0].opts.body.properties),['Habit Count']);
-  assert.equal(patch[0].opts.body.properties['Habit Count'].number,3);
+  assert.deepEqual(Object.keys(patch[0].opts.body.properties),[env.schema['Habit Count'].id]);
+  assert.equal(patch[0].opts.body.properties[env.schema['Habit Count'].id].number,3);
   assert.equal(rows[0].properties['Habit Count'].number,3);
   assert.equal(env.els('authorizeHabitDay').checked,false);
 });
