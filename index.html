@@ -435,7 +435,7 @@ code {font:inherit;white-space:nowrap}
       } while (cursor);
       var rows=all.filter(function (page) {
         if (!page || page.object!=='page' || page.in_trash===true) return false;
-        var types=typeValue((page.properties||{})[c.typeProp]);
+        var types=typeValue(taskProperty(page,c,'typeProp'));
         return types.some(function(t){return allowed.indexOf(t)>=0;});
       });
       var tasks=await PluginAPI.getTasks();
@@ -449,16 +449,16 @@ code {font:inherit;white-space:nowrap}
         checkbox.type='checkbox';
         checkbox.className='rowSelector';
         checkbox.dataset.pageId=page.id;
-        checkbox.setAttribute('aria-label','Select '+textValue(p[c.titleProp]));
+        checkbox.setAttribute('aria-label','Select '+textValue(taskProperty(page,c,'titleProp')));
         selection.appendChild(checkbox);
         tr.appendChild(selection);
-        appendCell(tr,textValue(p[c.titleProp]));
-        appendCell(tr,typeValue(p[c.typeProp]).join(', '));
-        appendCell(tr,dateValue(p[c.executionProp]));
-        appendCell(tr,dateValue(p[c.deadlineProp]));
-        appendCell(tr,numberValue(p[c.estimateProp],c.unit));
-        appendCell(tr,numberValue(p[c.actualProp],c.unit));
-        appendCell(tr,statusValue(p[c.statusProp]));
+        appendCell(tr,textValue(taskProperty(page,c,'titleProp')));
+        appendCell(tr,typeValue(taskProperty(page,c,'typeProp')).join(', '));
+        appendCell(tr,dateValue(taskProperty(page,c,'executionProp')));
+        appendCell(tr,dateValue(taskProperty(page,c,'deadlineProp')));
+        appendCell(tr,numberValue(taskProperty(page,c,'estimateProp'),c.unit));
+        appendCell(tr,numberValue(taskProperty(page,c,'actualProp'),c.unit));
+        appendCell(tr,statusValue(taskProperty(page,c,'statusProp')));
         tbody.appendChild(tr);
       });
       ui('summary').textContent='Read '+all.length+' Notion pages; '+rows.length+
@@ -480,13 +480,13 @@ code {font:inherit;white-space:nowrap}
       .map(function(c){return c.dataset.pageId;}));
     return lastVisibleRows.filter(function(page){return chosen.has(page.id);});
   }
-  function relationId(page,field) {
+  function relationId(page,config,key) {
     if (!field) return '';
-    var prop=(page.properties||{})[field];
+    var prop=taskProperty(page,config,key);
     return prop && Array.isArray(prop.relation) && prop.relation[0] ? prop.relation[0].id : '';
   }
-  function plannedDate(page,field,prefix) {
-    var prop=(page.properties||{})[field];
+  function plannedDate(page,config,key,prefix) {
+    var prop=taskProperty(page,config,key);
     if (!prop || !prop.date || !prop.date.start) return {};
     if (prop.date.end) throw new Error('Date range needs an explicit policy: ' + field);
     var start=String(prop.date.start), dayKey=prefix+'Day', timeKey=prefix+'WithTime';
@@ -502,7 +502,7 @@ code {font:inherit;white-space:nowrap}
     return {[timeKey]:n};
   }
   function estimateValue(page,config) {
-    var prop=(page.properties||{})[config.estimateProp];
+    var prop=taskProperty(page,config,'estimateProp');
     if (!prop || prop.number===null || prop.number===undefined) return null;
     var x=prop.number;
     if (typeof x!=='number' || !Number.isFinite(x) || x<0)
@@ -515,12 +515,12 @@ code {font:inherit;white-space:nowrap}
   }
   function completedFromNotion(page,config) {
     if (!config.statusProp || !config.completedValues) return false;
-    var name=statusValue((page.properties||{})[config.statusProp]);
+    var name=statusValue(taskProperty(page,config,'statusProp'));
     return splitValues(config.completedValues).includes(name);
   }
   function priorityFromNotion(page,config) {
     if (!config.priorityProp) return null;
-    var p=(page.properties||{})[config.priorityProp];
+    var p=taskProperty(page,config,'priorityProp');
     var value=p && p.select ? p.select.name : '';
     if (!value) return null;
     if (splitValues(config.priorityHigh).includes(value)) return 3;
@@ -537,7 +537,7 @@ code {font:inherit;white-space:nowrap}
       if (done.has(page.id)) return;
       if (visiting.has(page.id)) throw new Error('Cycle in Notion parent-task relations');
       visiting.add(page.id);
-      var parent=relationId(page,c.parentProp);
+      var parent=relationId(page,c,'parentProp');
       if (parent && chosen.has(parent)) visit(chosen.get(parent));
       visiting.delete(page.id);
       done.add(page.id);
@@ -564,7 +564,7 @@ code {font:inherit;white-space:nowrap}
       if (!selected.length) throw new Error('Select at least one Notion task row to import');
       var allowed=String(config.typeValues||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
       var entries=selected.filter(function(page){
-        return typeValue((page.properties||{})[config.typeProp]).some(function(t){return allowed.includes(t);});
+        return typeValue(taskProperty(page,config,'typeProp')).some(function(t){return allowed.includes(t);});
       });
       if (entries.length!==selected.length) throw new Error('One selected item is outside the allowed type filter');
       var existing=await PluginAPI.getTasks();
@@ -605,17 +605,17 @@ code {font:inherit;white-space:nowrap}
             continue;
           }
           if (link) {stats.skipped++;stats.errors.push('Existing task link points to missing SP task: '+id);continue;}
-          var parent=relationId(page,config.parentProp);
+          var parent=relationId(page,config,'parentProp');
           var parentSpId=parent ? await readLink(parent) : '';
           if (parent && !parentSpId) {
             stats.skipped++;
             stats.errors.push('Skipped subtask: import its parent bundle first ('+id+')');
             continue;
           }
-          var title=textValue(props[config.titleProp]);
+          var title=textValue(taskProperty(page,config,'titleProp'));
           if (!title.trim()) {stats.skipped++;stats.errors.push('Empty Notion task title: '+id);continue;}
-          var due=plannedDate(page,config.executionProp,'due');
-          var deadline=plannedDate(page,config.deadlineProp,'deadline');
+          var due=plannedDate(page,config,'executionProp','due');
+          var deadline=plannedDate(page,config,'deadlineProp','deadline');
           var estimate=estimateValue(page,config);
           var payload={
             title:title,projectId:projectId,notes:marker,
@@ -665,8 +665,8 @@ code {font:inherit;white-space:nowrap}
     return typeof a==='number' && typeof b==='number' &&
       Number.isFinite(a) && Number.isFinite(b) && Math.abs(a-b)<0.000001;
   }
-  function notionTimeNumber(page,propertyName) {
-    var field=(page.properties||{})[propertyName];
+  function notionTimeNumber(page,c,key) {
+    var field=taskProperty(page,c,key);
     if (!field || field.type!=='number') throw new Error('Actual time field is not a Number');
     return field.number===null ? null : field.number;
   }
@@ -704,7 +704,7 @@ code {font:inherit;white-space:nowrap}
       // Revalidate existing schema; do not create an Actual Time property automatically.
       var id=dataSourceId(c.taskSource,false);
       var source=await notion('/data_sources/'+encodeURIComponent(id));
-      var field=(source.properties||{})[c.actualProp];
+      var field=schemaTaskProperty(source.properties||{},c,'actualProp');
       if (!field || field.type!=='number') throw new Error('Actual Time property is missing or is not Number');
       var tasks=[].concat(await PluginAPI.getTasks()||[],await PluginAPI.getArchivedTasks()||[]);
       var approved=[],notes=[];
@@ -717,13 +717,13 @@ code {font:inherit;white-space:nowrap}
           }
           var tracked=plannedNumber(task.timeSpent,c.unit);
           if (tracked===null) {notes.push('No positive tracked time yet: '+page.id);continue;}
-          var before=notionTimeNumber(page,c.actualProp);
+          var before=notionTimeNumber(page,c,'actualProp');
           if (sameNumber(before,tracked)) continue;
           if (typeof before==='number' && before>tracked) {
             notes.push('Notion exceeds local SP time (stale device risk): '+page.id);continue;
           }
           approved.push({notionId:page.id,spId:task.id,before:before,after:tracked,
-            title:textValue((page.properties||{})[c.titleProp])});
+            title:textValue(taskProperty(page,c,'titleProp'))});
         } catch(e) {notes.push(page.id+': '+String(e&&e.message||e).slice(0,120));}
       }
       stagedTimeChanges={sourceId:id,mapping:JSON.stringify(c),
@@ -770,23 +770,23 @@ code {font:inherit;white-space:nowrap}
             stats.skipped++;stats.errors.push('Page moved or removed: '+entry.notionId);continue;
           }
           var allowed=splitValues(c.typeValues);
-          var types=typeValue((page.properties||{})[c.typeProp]);
+          var types=typeValue(taskProperty(page,c,'typeProp'));
           if (!types.some(function(t){return allowed.includes(t);})) {
             stats.skipped++;stats.errors.push('Notion type no longer allowed: '+entry.notionId);continue;
           }
-          var current=notionTimeNumber(page,c.actualProp);
+          var current=notionTimeNumber(page,c,'actualProp');
           if (!sameNumber(current,entry.before)) {
             stats.skipped++;stats.errors.push('Notion time changed since preview: '+entry.notionId);continue;
           }
           var patch={properties:{}};
-          patch.properties[c.actualProp]={number:entry.after};
+          patch.properties[taskWriteKey(c,'actualProp')]={number:entry.after};
           var result=await notion('/pages/'+encodeURIComponent(entry.notionId),'PATCH',patch);
           if (!result || result.object!=='page' || result.id!==entry.notionId)
             throw new Error('Notion did not confirm page update; re-preview before retrying');
           stats.written++;
           var cached=lastVisibleRows.find(function(p){return p.id===entry.notionId;});
-          if (cached && cached.properties && cached.properties[c.actualProp])
-            cached.properties[c.actualProp].number=entry.after;
+          if (cached && cached.properties && taskProperty(cached,c,'actualProp'))
+            taskProperty(cached,c,'actualProp').number=entry.after;
         } catch(e) {
           stats.skipped++;
           stats.errors.push(entry.notionId+': '+String(e&&e.message||e).slice(0,140));
