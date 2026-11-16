@@ -1546,3 +1546,22 @@ test('a task marker without an independent saved ID link cannot authorize SP pla
   await env.els('stagePlanBtn').events.click();
   assert.match(env.els('planRefreshDiff').textContent,/1 linked SP task planning updates/);
 });
+
+
+test('manual habit-day preview and writeback refuse missing pagination cursor',async()=>{
+  const rows=[habitOccurrence('habit-original-1','habit-occ-1',0)],env=mount(rows);
+  await setupHabitDay(env);
+  const real=env.api.request;
+  env.api.request=async(url,opts)=>{
+    const data=await real(url,opts);
+    if(opts.method==='POST'&&url.includes('/query'))
+      return {...data,has_more:true,next_cursor:null};
+    return data;
+  };
+  await env.els('previewHabitDay').events.click();
+  assert.match(env.els('notice').textContent,/pagination cursor missing/);
+  env.els('authorizeHabitDay').checked=true;
+  await env.els('pushHabitDay').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
+});
