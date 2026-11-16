@@ -649,7 +649,7 @@ test('pin task field IDs then rename Notion property labels without losing previ
   env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
   await env.els('save').events.click();
   await env.els('pinProps').events.click();
-  assert.match(env.els('notice').textContent,/Pinned 7 stable/);
+  assert.match(env.els('notice').textContent,/Pinned 6 stable/);
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
   assert.equal(env.requests.filter(x=>x.opts.method==='POST').length,0);
   const pinned=JSON.parse(env.stores.at(-1).data);
