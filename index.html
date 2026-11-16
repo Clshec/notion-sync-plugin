@@ -67,7 +67,7 @@ code {font:inherit;white-space:nowrap}
 </section>
 <section>
   <h2>2. Map properties already present in Notion</h2>
-  <p class="muted"><small>Property names are configurable and case-sensitive. Fill in only fields that exist. This form never adds properties or new databases.</small></p>
+  <p class="muted"><small>Use existing property names (or Notion property IDs). Click <strong>Pin task property IDs</strong> before renaming fields to English: the plugin saves stable IDs, without changing any Notion schema or pages.</small></p>
   <div class="grid">
     <label>Task title property (Title) <input id="titleProp" placeholder="e.g. Name / المصدر"></label>
     <label>Item type property (Multi-select or Select) <input id="typeProp" placeholder="e.g. Item Type / نوع الصفحة"></label>
@@ -94,6 +94,7 @@ code {font:inherit;white-space:nowrap}
   </div>
   <div class="actions">
     <button id="schemaBtn">Inspect existing data source schema</button>
+    <button id="pinProps">Pin task property IDs (mapping only)</button>
     <button id="previewBtn" class="primary">Preview matching tasks (NO WRITES)</button>
   </div>
   <div id="notice" role="status" aria-live="polite" hidden></div>
@@ -198,6 +199,7 @@ code {font:inherit;white-space:nowrap}
   var stagedTimeChanges = null;
   var habitPreview = null;
   var stagedHabitDay = null;
+  var taskPropertyBindings = {};
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
@@ -222,15 +224,19 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','previewBtn','importBtn','planTimeBtn','pushTimeBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','planTimeBtn','pushTimeBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
     INPUTS.forEach(function (id) { c[id] = String(ui(id).value || '').trim(); });
+    if (Object.keys(taskPropertyBindings).length)
+      c.taskPropertyBindings = JSON.parse(JSON.stringify(taskPropertyBindings));
     return c;
   }
   function putForm(c) {
     INPUTS.forEach(function (id) { if (typeof c[id] === 'string') ui(id).value = c[id]; });
+    taskPropertyBindings = c.taskPropertyBindings && typeof c.taskPropertyBindings==='object' ?
+      c.taskPropertyBindings : {};
   }
   function dataSourceId(value, optional) {
     var v = String(value || '').trim();
@@ -284,12 +290,72 @@ code {font:inherit;white-space:nowrap}
     } catch (e) { fail(e); }
     finally { busy(false); }
   }
+  // A stable binding is valid only for the Notion source and selected input
+  // from which it was pinned. If its ID disappears, never retarget by name.
+  function taskPropertyId(c,key) {
+    var b=c.taskPropertyBindings&&c.taskPropertyBindings[key];
+    if(!b || b.input!==c[key] || !b.id || typeof b.id!=='string') return '';
+    if(b.sourceId!==dataSourceId(c.taskSource,true))return '';
+    return b.id;
+  }
+  function schemaTaskProperty(schema,c,key) {
+    if(!c[key])return null;
+    var stable=taskPropertyId(c,key);
+    if(stable) {
+      var ids=Object.keys(schema).filter(function(k){return schema[k]&&schema[k].id===stable;});
+      return ids.length===1?schema[ids[0]]:null;
+    }
+    if(schema[c[key]])return schema[c[key]];
+    var matches=Object.keys(schema).filter(function(k){return schema[k]&&schema[k].id===c[key];});
+    return matches.length===1?schema[matches[0]]:null;
+  }
+  function taskProperty(page,c,key) {
+    if(!c[key])return null;
+    var props=page&&page.properties||{},stable=taskPropertyId(c,key);
+    if(stable) {
+      var names=Object.keys(props).filter(function(k){return props[k]&&props[k].id===stable;});
+      return names.length===1?props[names[0]]:null;
+    }
+    if(props[c[key]])return props[c[key]];
+    var matches=Object.keys(props).filter(function(k){return props[k]&&props[k].id===c[key];});
+    return matches.length===1?props[matches[0]]:null;
+  }
+  function taskWriteKey(c,key) {return taskPropertyId(c,key)||c[key];}
+
+  async function pinTaskPropertyIds() {
+    if(active)return;
+    busy(true);
+    try {
+      var c=getForm(),id=dataSourceId(c.taskSource,false);
+      var source=await notion('/data_sources/'+encodeURIComponent(id));
+      var schema=source.properties||{},next={},count=0;
+      for(var key of Object.keys(FIELDS)) {
+        if(!c[key])continue;
+        var prop=schemaTaskProperty(schema,c,key);
+        if(!prop || !FIELDS[key].includes(prop.type))
+          throw new Error('Configured task property not found or wrong type: '+key);
+        if(typeof prop.id!=='string'||!prop.id)
+          throw new Error('Notion did not return a stable ID for task property: '+key);
+        next[key]={sourceId:id,input:c[key],id:prop.id};
+        count++;
+      }
+      if(!count)throw new Error('Configure existing task properties before pinning');
+      await PluginAPI.persistDataSynced(JSON.stringify(Object.assign({},c,{
+        taskPropertyBindings:next
+      })),CFG_KEY);
+      taskPropertyBindings=next;
+      lastPreviewConfig=null;stagedTimeChanges=null;stagedHabitDay=null;
+      ui('authorizeTime').checked=false;
+      message('Pinned '+count+' stable task property IDs in synced plugin metadata only. Rename-safe for these fields. Re-run task preview; Notion was not changed.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
   function propTypes(schema, config) {
     var errors = [];
     Object.keys(FIELDS).forEach(function (key) {
       var name = config[key];
       if (!name) return;
-      var prop = schema[name];
+      var prop = schemaTaskProperty(schema,config,key);
       if (!prop) errors.push(key + ': "' + name + '" is not in the existing data source');
       else if (FIELDS[key].indexOf(prop.type) === -1)
         errors.push(key + ': "' + name + '" has type ' + prop.type + ' (expected ' + FIELDS[key].join('/') + ')');
@@ -331,7 +397,7 @@ code {font:inherit;white-space:nowrap}
       var id = dataSourceId(c.taskSource, false);
       var source = await notion('/data_sources/' + encodeURIComponent(id));
       var schema = source.properties || {};
-      var list = Object.keys(schema).sort().map(function (k) { return k + ' — ' + schema[k].type; });
+      var list = Object.keys(schema).sort().map(function (k) { return k + ' — ' + schema[k].type + (schema[k].id?' — ID: '+schema[k].id:''); });
       ui('schema').textContent = 'Existing properties (' + list.length + '):\n' + list.join('\n');
       var mismatches = propTypes(schema,c);
       message(mismatches.length ? 'Mapping warnings:\n' + mismatches.join('\n') : 'Schema retrieved. No Notion data was modified.', mismatches.length > 0);
@@ -1084,6 +1150,7 @@ code {font:inherit;white-space:nowrap}
     ui('save').addEventListener('click',save);
     ui('disconnect').addEventListener('click',disconnect);
     ui('schemaBtn').addEventListener('click',inspect);
+    ui('pinProps').addEventListener('click',pinTaskPropertyIds);
     ui('previewBtn').addEventListener('click',preview);
     ui('importBtn').addEventListener('click',importChecked);
     ui('planTimeBtn').addEventListener('click',stageActualTime);
