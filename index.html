@@ -178,6 +178,27 @@ code {font:inherit;white-space:nowrap}
   <p id="timeReport" role="status" aria-live="polite" class="muted"></p>
 </section>
 <section>
+  <h2>5b. Automatic actual work time → existing Notion Number (EXPERIMENTAL)</h2>
+  <p>First use the manual time review/writeback above until each task's existing Notion actual-time value matches the recorded SP work time. Then select those already-linked tasks in a fresh Notion preview and explicitly prepare an exact matching baseline. Preparation writes only Alf metadata; it never changes Notion or SP tasks.</p>
+  <p>After enabling on this device, the plugin may export <strong>only positive, increasing, already-tracked time</strong> for those anchored individual tasks, at most 5 per periodic check. It rechecks the existing Notion property ID, original task and database, exact prior Notion number, SP time and synced link before any PATCH. A higher or manually changed Notion value stops that task. No new Notion pages, properties or databases; no completed Pomodoro calculations.</p>
+  <p class="muted">This writes to Notion without another prompt after opt-in. Experimental: enable on only ONE device, only against disposable test data. Android suspension, network retries, Notion rate limits and non-atomic PATCH may affect it; unknown outcomes require manually reconciling/reseeding. This feature is independent from planning auto-pull and is OFF by default.</p>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeAutoTimeSeed" type="checkbox" style="width:auto">
+    <span>I authorize preparing time baselines only where current SP and existing Notion time already agree.</span>
+  </label>
+  <div class="actions"><button id="seedAutoTimeBtn">Prepare selected matching tracked-time baselines (NO NOTION WRITES)</button></div>
+  <p id="autoTimeSeedReport" role="status" aria-live="polite" class="muted"></p>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeAutoTimeLocal" type="checkbox" style="width:auto">
+    <span>I understand subsequent automatic Notion Number writes require no further prompts, and explicitly enable this device only.</span>
+  </label>
+  <div class="actions">
+    <button id="enableAutoTimeBtn">Enable automatic time export (THIS DEVICE)</button>
+    <button id="disableAutoTimeBtn">Disable automatic time export</button>
+  </div>
+  <p id="autoTimeStatus" role="status" aria-live="polite" class="muted"></p>
+</section>
+<section>
   <h2>6. Observed focus sessions (read-only report)</h2>
   <p>Alf records only future focus-session starts and completions observed while the plugin is active. Unknown mode/task, interrupted, or ambiguous sessions are excluded. A verified automatic Pomodoro completion counts once by session ID; manually ended sessions do not count as completed Pomodoros. Historical sessions cannot be backfilled. This report does not write anything to Notion.</p>
   <div class="actions"><button id="loadSessions">Read observed focus sessions and compare to the task preview (NO WRITES)</button></div>
@@ -262,6 +283,8 @@ code {font:inherit;white-space:nowrap}
   var TOKEN_KEY = 'alf-notion-token';
   var AUTO_PLAN_ENABLED_KEY = 'alf-auto-plan-local-enabled-v1';
   var AUTO_PLAN_ANCHOR_PREFIX = 'alf-plan-anchor-v1-';
+  var AUTO_TIME_ENABLED_KEY = 'alf-auto-time-local-enabled-v1';
+  var AUTO_TIME_ANCHOR_PREFIX = 'alf-time-anchor-v1-';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
@@ -285,7 +308,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -1081,6 +1104,105 @@ code {font:inherit;white-space:nowrap}
     if (typeof ms!=='number' || !Number.isFinite(ms) || ms<=0) return null;
     return Math.round((ms/(unit==='minutes'?60000:3600000))*1000000)/1000000;
   }
+
+  function automaticTimeSpec(c) {
+    var sourceId=dataSourceId(c.taskSource,false);
+    if(!c.actualProp || !c.typeProp || !splitValues(c.typeValues).length)
+      throw new Error('Configure an existing Notion Actual Time Number and task type allowlist');
+    if(!['minutes','hours'].includes(c.unit))
+      throw new Error('Select an explicit hour/minute time unit');
+    var typeId=taskPropertyId(c,'typeProp'),actualId=taskPropertyId(c,'actualProp');
+    if(!typeId||!actualId)throw new Error('Pin stable type and Actual Time property IDs first');
+    return {sourceId:sourceId,typeId:typeId,actualId:actualId,
+      unit:c.unit,allowed:splitValues(c.typeValues).slice().sort()};
+  }
+  async function seedAutomaticTimeAnchors() {
+    if(active)return;
+    busy(true);
+    try {
+      if(!ui('authorizeAutoTimeSeed').checked)
+        throw new Error('Explicitly authorize the existing matching work-time baselines');
+      var c=getForm();
+      if(!lastPreviewConfig||lastPreviewConfig!==JSON.stringify(c))
+        throw new Error('Refresh Notion task preview before time baseline preparation');
+      var spec=automaticTimeSpec(c),selected=getSelectedPages();
+      if(!selected.length)throw new Error('Select linked Notion tasks to prepare');
+      var schema=await notion('/data_sources/'+encodeURIComponent(spec.sourceId));
+      if(!schemaTaskProperty(schema.properties||{},c,'actualProp') ||
+         schemaTaskProperty(schema.properties||{},c,'actualProp').type!=='number')
+        throw new Error('Existing pinned Notion Actual Time property is unavailable');
+      if(!schemaTaskProperty(schema.properties||{},c,'typeProp') ||
+         !['select','multi_select'].includes(schemaTaskProperty(schema.properties||{},c,'typeProp').type))
+        throw new Error('Existing pinned Notion type property is unavailable');
+      var tasks=[].concat(await PluginAPI.getTasks()||[],await PluginAPI.getArchivedTasks()||[]);
+      var ready=0,skipped=0,notes=[];
+      for(var snapshot of selected) {
+        try {
+          var page=await notion('/pages/'+encodeURIComponent(snapshot.id));
+          if(!page||page.object!=='page'||page.in_trash||
+             normalizedUUID(page.id)!==normalizedUUID(snapshot.id)||
+             normalizedUUID(page.parent&&page.parent.data_source_id)!==spec.sourceId)
+            throw new Error('Notion page changed source or is missing');
+          if(!typeValue(taskProperty(page,c,'typeProp')).some(function(t){return spec.allowed.includes(t);}))
+            throw new Error('Notion item is no longer a permitted task');
+          var task=await findLinkedSpTask(page.id,tasks);
+          if(!task || (task.subTaskIds||[]).length)
+            throw new Error('No unique SP leaf task; parent rollups cannot be exported');
+          var linkRaw=await PluginAPI.loadSyncedData(LINK_PREFIX+page.id);
+          var link=linkRaw?JSON.parse(linkRaw):null;
+          if(!link || link.notionId!==page.id || link.spId!==task.id ||
+            !exactlyLinkedTaskMarker(task,page.id))
+            throw new Error('SP task marker and stored Notion link disagree');
+          var tracked=plannedNumber(task.timeSpent,c.unit);
+          var notionValue=notionTimeNumber(page,c,'actualProp');
+          if(tracked===null || !Number.isSafeInteger(task.timeSpent) || task.timeSpent<=0 ||
+             !sameNumber(notionValue,tracked))
+            throw new Error('Actual time differs; run manual reviewed time export first');
+          var anchor={version:1,notionId:page.id,spId:task.id,
+            sourceId:spec.sourceId,spec:JSON.stringify(spec),
+            projectId:task.projectId??null,parentId:task.parentId??null,
+            expectedNotion:notionValue,expectedSpMs:task.timeSpent};
+          await PluginAPI.persistDataSynced(JSON.stringify(anchor),AUTO_TIME_ANCHOR_PREFIX+page.id);
+          ready++;
+        }catch(e){skipped++;notes.push(snapshot.id+': '+String(e&&e.message||e).slice(0,125));}
+      }
+      ui('autoTimeSeedReport').textContent=ready+' matching time baselines prepared, '+
+        skipped+' skipped. '+notes.slice(0,8).join('; ')+'. No Notion/SP work data modified.';
+      ui('authorizeAutoTimeSeed').checked=false;
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function enableLocalAutomaticTime() {
+    if(active)return;
+    busy(true);
+    try {
+      if(!ui('authorizeAutoTimeLocal').checked)
+        throw new Error('Explicitly authorize ongoing Notion time writes on THIS device');
+      automaticTimeSpec(getForm());
+      if(!await PluginAPI.getSecret(TOKEN_KEY))
+        throw new Error('Local Notion token missing on this device');
+      if(typeof PluginAPI.listSyncedDataKeys!=='function')
+        throw new Error('SP synchronized metadata inventory unavailable');
+      var keys=await PluginAPI.listSyncedDataKeys(AUTO_TIME_ANCHOR_PREFIX);
+      if(!Array.isArray(keys)||!keys.length)
+        throw new Error('Prepare at least one reviewed matching time baseline first');
+      await PluginAPI.setSecret(AUTO_TIME_ENABLED_KEY,'enabled');
+      ui('autoTimeStatus').textContent='Automatic Notion work-time export ENABLED on this device. Strict monotonic, pinned existing Number fields only.';
+      ui('authorizeAutoTimeLocal').checked=false;
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function disableLocalAutomaticTime() {
+    if(active)return;
+    busy(true);
+    try {
+      await PluginAPI.deleteSecret(AUTO_TIME_ENABLED_KEY);
+      ui('authorizeAutoTimeLocal').checked=false;
+      ui('autoTimeStatus').textContent='Automatic Notion work-time export disabled here. Synced task baselines remain for inspection.';
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
   async function stageActualTime() {
     if (active) return;
     busy(true);
@@ -1861,6 +1983,10 @@ code {font:inherit;white-space:nowrap}
       if(!ui('pomodoroWorkMinutes').value)ui('pomodoroWorkMinutes').value='25';
       var local=await PluginAPI.getSecret(TOKEN_KEY);
       var autoEnabled=await PluginAPI.getSecret(AUTO_PLAN_ENABLED_KEY);
+      var timeEnabled=await PluginAPI.getSecret(AUTO_TIME_ENABLED_KEY);
+      ui('autoTimeStatus').textContent=timeEnabled==='enabled'?
+        'Automatic Notion work-time export is enabled on THIS device (experimental).':
+        'Automatic Notion work-time export is disabled on this device (default).';
       ui('autoPlanStatus').textContent=autoEnabled==='enabled'?
         'Auto planning enabled on this device; requires running SP and locally stored Notion token.':
         'Auto planning disabled on this device (default).';
@@ -1880,6 +2006,9 @@ code {font:inherit;white-space:nowrap}
     ui('disableAutoPlanBtn').addEventListener('click',disableLocalAutomaticPlan);
     ui('planTimeBtn').addEventListener('click',stageActualTime);
     ui('pushTimeBtn').addEventListener('click',commitActualTime);
+    ui('seedAutoTimeBtn').addEventListener('click',seedAutomaticTimeAnchors);
+    ui('enableAutoTimeBtn').addEventListener('click',enableLocalAutomaticTime);
+    ui('disableAutoTimeBtn').addEventListener('click',disableLocalAutomaticTime);
     ui('loadSessions').addEventListener('click',showFocusSessions);
     ui('previewObservedPomoBtn').addEventListener('click',stageObservedPomodoros);
     ui('pushObservedPomoBtn').addEventListener('click',commitObservedPomodoros);
