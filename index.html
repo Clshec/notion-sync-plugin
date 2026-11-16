@@ -1418,11 +1418,11 @@ code {font:inherit;white-space:nowrap}
       var id=dataSourceId(c.habitSource,false);
       if (!c.habitTitleProp) throw new Error('Select an existing habit title property');
       var source=await notion('/data_sources/'+encodeURIComponent(id));
-      var props=source.properties||{}, titleField=props[c.habitTitleProp];
+      var props=source.properties||{}, titleField=habitSchemaProperty(props,c,'habitTitleProp');
       if (!titleField || titleField.type!=='title')
         throw new Error('Habit definition title field is missing or is not Title');
-      if (c.habitCadenceProp && (!props[c.habitCadenceProp] ||
-          !['select','multi_select'].includes(props[c.habitCadenceProp].type))) {
+      if (c.habitCadenceProp && (!habitSchemaProperty(props,c,'habitCadenceProp') ||
+          !['select','multi_select'].includes(habitSchemaProperty(props,c,'habitCadenceProp').type))) {
         throw new Error('Habit cadence must be an existing Select/Multi-select property');
       }
       if (typeof PluginAPI.getAppState!=='function')
@@ -1443,8 +1443,8 @@ code {font:inherit;white-space:nowrap}
       var today=habitLocalDay();
       for(var habit of habits.slice(0,75)) {
         var row=document.createElement('tr'), p=habit.properties||{};
-        appendCell(row,textValue(p[c.habitTitleProp]));
-        var cd=p[c.habitCadenceProp];
+        appendCell(row,textValue(habitPageProperty(habit,c,'habitTitleProp')));
+        var cd=habitPageProperty(habit,c,'habitCadenceProp');
         appendCell(row,cd&&cd.select?cd.select.name:
           cd&&Array.isArray(cd.multi_select)?cd.multi_select.map(function(x){return x.name;}).join(', '):'');
         var holder=document.createElement('td'),select=document.createElement('select');
@@ -1529,29 +1529,28 @@ code {font:inherit;white-space:nowrap}
     if(counter.type!=='StopWatch'||!['minutes','hours'].includes(unit))return null;
     return Math.round((n/(unit==='minutes'?60000:3600000))*1000000)/1000000;
   }
-  function habitRelId(p,field) {
-    var rel=p&&p[field]&&p[field].relation;
+  function habitRelId(page,c) {
+    var field=habitPageProperty(page,c,'habitOccRelationProp');
+    var rel=field&&field.relation;
     if(!Array.isArray(rel)||rel.length!==1||!rel[0]||!rel[0].id)return null;
     return rel[0].id;
   }
   function occurrenceMatches(page,c,day) {
     var p=page&&page.properties||{};
     if(!page||page.object!=='page'||page.in_trash)return false;
-    if(!typeValue(p[c.habitOccTypeProp]).includes(c.habitOccTypeValue))return false;
-    var date=p[c.habitOccDayProp]&&p[c.habitOccDayProp].date;
+    if(!typeValue(habitPageProperty(page,c,'habitOccTypeProp')).includes(c.habitOccTypeValue))return false;
+    var dayProp=habitPageProperty(page,c,'habitOccDayProp');
+    var date=dayProp&&dayProp.date;
     // Strict date-only; a timestamp needs explicit timezone policy before writing.
     return !!date && typeof date.start==='string' && date.start===day && !date.end;
   }
   function validateOccurrenceMapping(schema,c) {
-    var checks=[
-      [c.habitOccTypeProp,['select','multi_select']],
-      [c.habitOccRelationProp,['relation']],
-      [c.habitOccDayProp,['date']],
-      [c.habitOccCountProp,['number']]
-    ];
-    for(var pair of checks) {
-      if(!pair[0]||!schema[pair[0]]||!pair[1].includes(schema[pair[0]].type))
-        throw new Error('Missing or incompatible existing Notion occurrence property: '+pair[0]);
+    for(var key of Object.keys(HABIT_OCCURRENCE_FIELDS)) {
+      var prop=habitSchemaProperty(schema,c,key);
+      if(!prop || !HABIT_OCCURRENCE_FIELDS[key].includes(prop.type))
+        throw new Error('Missing or incompatible existing Notion occurrence property: '+key);
+      if(!habitPinnedId(c,key))
+        throw new Error('Pin stable occurrence property IDs before habit-day writeback: '+key);
     }
     if(!c.habitOccTypeValue) throw new Error('Select the exact Notion habit item type value');
   }
@@ -1570,11 +1569,11 @@ code {font:inherit;white-space:nowrap}
         throw new Error('Cannot determine SP logical day');
       var info=await notion('/data_sources/'+encodeURIComponent(sourceId));
       validateOccurrenceMapping(info.properties||{},c);
-      var kind=(info.properties||{})[c.habitOccTypeProp].type;
-      var typeFilter={property:c.habitOccTypeProp};
+      var kind=habitSchemaProperty(info.properties||{},c,'habitOccTypeProp').type;
+      var typeFilter={property:habitWriteKey(c,'habitOccTypeProp')};
       typeFilter[kind]={};
       typeFilter[kind][kind==='select'?'equals':'contains']=c.habitOccTypeValue;
-      var filter={and:[typeFilter,{property:c.habitOccDayProp,date:{equals:day}}]};
+      var filter={and:[typeFilter,{property:habitWriteKey(c,'habitOccDayProp'),date:{equals:day}}]};
       var entries=[],cursor,truncated=false;
       do {
         var payload={page_size:Math.min(100,300-entries.length),filter:filter};
@@ -1591,7 +1590,7 @@ code {font:inherit;white-space:nowrap}
       var staged=[],notes=[],seen=new Set(),duplicate=new Set();
       for(var page of entries) {
         if(!occurrenceMatches(page,c,day))continue;
-        var habitId=habitRelId(page.properties,c.habitOccRelationProp);
+        var habitId=habitRelId(page,c);
         if(!habitId){notes.push('Missing/ambiguous habit definition relation: '+page.id);continue;}
         var dedup=normalizedUUID(habitId)+':'+day;
         if(seen.has(dedup)){duplicate.add(dedup);notes.push('Duplicate existing habit-day row: '+page.id);continue;}
@@ -1605,7 +1604,7 @@ code {font:inherit;white-space:nowrap}
         var counter=counters[link.spCounterId];
         var after=rawCounterValue(counter,day,c.habitOccUnit);
         if(after===null){notes.push('No positive compatible counter count: '+page.id);continue;}
-        var property=page.properties[c.habitOccCountProp];
+        var property=habitPageProperty(page,c,'habitOccCountProp');
         if(!property||property.type!=='number')
           throw new Error('Occurrence value is not a Notion Number field');
         var before=property.number;
@@ -1642,10 +1641,19 @@ code {font:inherit;white-space:nowrap}
       var ctx=await PluginAPI.getDayContext();
       if(!ctx||ctx.todayStr!==plan.day)
         throw new Error('SP logical day changed; restage before any writes');
+      var info=await notion('/data_sources/'+encodeURIComponent(plan.sourceId));
+      validateOccurrenceMapping(info.properties||{},c);
       var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
       var done=0,skipped=0,issues=[];
       for(var e of plan.updates) {
         try {
+          var rawLink=await PluginAPI.loadSyncedData(HABIT_KEY_PREFIX+e.habitId);
+          var savedLink=rawLink?JSON.parse(rawLink):null;
+          if(!savedLink || normalizedUUID(savedLink.notionId)!==normalizedUUID(e.habitId) ||
+             savedLink.spCounterId!==e.counterId ||
+             normalizedUUID(savedLink.notionSourceId)!==normalizedUUID(dataSourceId(c.habitSource,false))) {
+            skipped++;issues.push('Habit counter link changed since preview: '+e.pageId);continue;
+          }
           if(!sameNumber(rawCounterValue(counters[e.counterId],e.day,e.unit),e.after)){
             skipped++;issues.push('SP counter changed since preview: '+e.pageId);continue;
           }
@@ -1653,15 +1661,15 @@ code {font:inherit;white-space:nowrap}
           if(!page||page.object!=='page'||page.in_trash||
              normalizedUUID(page.parent&&page.parent.data_source_id)!==plan.sourceId||
              !occurrenceMatches(page,c,e.day)||
-             normalizedUUID(habitRelId(page.properties,c.habitOccRelationProp))!==normalizedUUID(e.habitId)){
+             normalizedUUID(habitRelId(page,c))!==normalizedUUID(e.habitId)){
             skipped++;issues.push('Notion page moved/type/date/relation changed: '+e.pageId);continue;
           }
-          var prop=page.properties[c.habitOccCountProp];
+          var prop=habitPageProperty(page,c,'habitOccCountProp');
           if(!prop||prop.type!=='number'||!sameNumber(prop.number,e.before)){
             skipped++;issues.push('Notion daily count changed since preview: '+e.pageId);continue;
           }
           var patch={properties:{}};
-          patch.properties[c.habitOccCountProp]={number:e.after};
+          patch.properties[habitWriteKey(c,'habitOccCountProp')]={number:e.after};
           var response=await notion('/pages/'+encodeURIComponent(e.pageId),'PATCH',patch);
           if(!response||response.object!=='page'||response.id!==e.pageId)
             throw new Error('Notion update not confirmed; re-preview to reconcile');
