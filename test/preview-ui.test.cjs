@@ -20,7 +20,7 @@ function mount(customRows, habitRows) {
   const imports = [];
   const updates = [];
   const existingTasks = [{id:'sp1',title:'Existing SP task'}];
-  let secret = null;
+  const secrets = new Map();
   let logicalDay='2026-11-16';
   function element(id) {
     if (!els.has(id)) {
@@ -59,9 +59,9 @@ function mount(customRows, habitRows) {
   };
   const api = {
     onReady(fn) { fn(); },
-    async getSecret() { return secret; },
-    async setSecret(k,v) {secretWrites.push([k,v]); secret=v;},
-    async deleteSecret() {secret=null;},
+    async getSecret(k) { return secrets.get(k) || null; },
+    async setSecret(k,v) {secretWrites.push([k,v]); secrets.set(k,v);},
+    async deleteSecret(k) {secrets.delete(k);},
     async loadSyncedData(k) {return stored.get(k) || null;},
     async listSyncedDataKeys(prefix) {return [...stored.keys()].filter(k=>k.startsWith(prefix));},
     async persistDataSynced(v,k) { stores.push({data:v,key:k}); stored.set(k,v); },
@@ -178,8 +178,10 @@ test('manifest declares only Notion HTTP host and per-device secret API', () => 
   assert.equal(manifest.id, 'alf-notion-super-productivity');
   assert.ok(host.includes('PluginAPI.Hooks.ACTION'), 'live focus events use host API');
   assert.ok(host.includes('PluginAPI.Hooks.CURRENT_TASK_CHANGE'), 'task identity hook enabled');
-  assert.ok(!host.includes('PluginAPI.request('), 'host background code never calls Notion API');
-  assert.ok(!host.includes('updateTask('), 'no SP writes');
+  assert.ok(host.includes('alfCreateAutoPlanSync('), 'auto planning is separately opt-in');
+  assert.ok(host.includes("ALF_AUTO_PLAN_FLAG"), 'local-only enable flag exists');
+  assert.ok(host.includes("method:'GET'"), 'background Notion access is read-only');
+  assert.ok(!host.includes("method:'PATCH'"), 'background never PATCHes Notion');
   assert.ok(!host.includes('fetch('), 'no unguarded network calls');
 });
 
@@ -1229,4 +1231,92 @@ test('different habit added after preview does not block unrelated reviewed dail
   assert.equal(writes.length,1);
   assert.equal(rows[0].properties['Habit Count'].number,3);
   assert.equal(rows[1].properties['Habit Count'].number,9);
+});
+
+
+function autoPlanPage() {
+  return {object:'page',id:'aab4a62b4b7d806989b9000b73ac11c8',properties:{
+    'المصدر':{type:'title',title:[{plain_text:'Known linked task'}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'مهمة'}]},
+    'الوقت المخطط له':{type:'number',number:1},
+    'يوم التنفيذ':{type:'date',date:{start:'2026-11-16'}}
+  }};
+}
+async function setupAutoPlan(env,rows) {
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  for(const [name,p] of Object.entries(env.schema))
+    p.id=p.id||'stable-auto-'+Object.keys(env.schema).indexOf(name);
+  for(const [name,p] of Object.entries(rows[0].properties))
+    p.id=env.schema[name].id;
+  env.els('token').value='ntn_AUTO_TEST_SECRET';
+  await env.els('save').events.click();
+  await env.els('pinProps').events.click();
+  await env.els('previewBtn').events.click();
+  assert.equal(env.els('results').children.length,1);
+  env.els('targetSpProject').value='projectX';
+  env.els('authorizeImport').checked=true;
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1);
+  return env.existingTasks.at(-1);
+}
+test('automatic Notion plan seeding requires independent consent and never mutates SP or Notion',async()=>{
+  const rows=[autoPlanPage()],env=mount(rows);
+  const task=await setupAutoPlan(env,rows);
+  await env.els('seedAutoPlanBtn').events.click();
+  assert.match(env.els('notice').textContent,/Explicitly authorize preparing/);
+  assert.equal(env.updates.length,0);
+  env.els('authorizeAutoSeed').checked=true;
+  await env.els('seedAutoPlanBtn').events.click();
+  assert.match(env.els('autoSeedReport').textContent,/1 matching linked task baselines prepared/);
+  assert.equal(env.updates.length,0);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  const anchor=JSON.parse(env.stores.find(x=>x.key==='alf-plan-anchor-v1-'+rows[0].id).data);
+  assert.equal(anchor.spId,task.id);
+  assert.equal(anchor.expected.timeEstimate,3600000);
+  assert.equal(anchor.expected.dueDay,'2026-11-16');
+  assert.equal(anchor.expected.title,'Known linked task');
+  assert.ok(!env.stores.some(x=>x.data.includes('ntn_AUTO_TEST_SECRET')));
+});
+test('automatic plan flag is local per device, off by default, and requires explicit consent',async()=>{
+  const rows=[autoPlanPage()],env=mount(rows);
+  await setupAutoPlan(env,rows);
+  await env.els('enableAutoPlanBtn').events.click();
+  assert.match(env.els('notice').textContent,/Explicitly authorize automatic/);
+  assert.equal(await env.api.getSecret('alf-auto-plan-local-enabled-v1'),null);
+  env.els('authorizeAutoLocal').checked=true;
+  await env.els('enableAutoPlanBtn').events.click();
+  assert.match(env.els('notice').textContent,/Prepare at least one matching/);
+  assert.equal(await env.api.getSecret('alf-auto-plan-local-enabled-v1'),null);
+  env.els('authorizeAutoSeed').checked=true;
+  await env.els('seedAutoPlanBtn').events.click();
+  env.els('authorizeAutoLocal').checked=true;
+  await env.els('enableAutoPlanBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-plan-local-enabled-v1'),'enabled');
+  assert.equal(await env.api.getSecret('alf-notion-token'),'ntn_AUTO_TEST_SECRET');
+  assert.ok(!env.stores.some(x=>x.data.includes('alf-auto-plan-local-enabled-v1')));
+  await env.els('disableAutoPlanBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-plan-local-enabled-v1'),null);
+  assert.equal(await env.api.getSecret('alf-notion-token'),'ntn_AUTO_TEST_SECRET');
+});
+test('automatic baselines skip divergent local SP work plans rather than force them',async()=>{
+  const rows=[autoPlanPage()],env=mount(rows);
+  const task=await setupAutoPlan(env,rows);
+  task.title='Offline edited title';
+  env.els('authorizeAutoSeed').checked=true;
+  await env.els('seedAutoPlanBtn').events.click();
+  assert.match(env.els('autoSeedReport').textContent,/0 matching linked task baselines/);
+  assert.match(env.els('autoSeedReport').textContent,/Notion and SP plans differ/);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-plan-anchor-v1-')).length,0);
+  assert.equal(task.title,'Offline edited title');
+});
+test('automatic baselines refuse changed Notion source or allowed task type',async()=>{
+  const rows=[autoPlanPage()],env=mount(rows);
+  await setupAutoPlan(env,rows);
+  rows[0].properties['نوع الصفحة'].multi_select=[{name:'تعلم'}];
+  env.els('authorizeAutoSeed').checked=true;
+  await env.els('seedAutoPlanBtn').events.click();
+  assert.match(env.els('autoSeedReport').textContent,/0 matching linked task baselines/);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-plan-anchor-v1-')).length,0);
 });

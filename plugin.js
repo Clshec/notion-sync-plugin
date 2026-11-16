@@ -179,3 +179,276 @@ if (typeof PluginAPI !== 'undefined') {
     (payload) => alfFocusObserver.onAction(payload)
   );
 }
+
+
+// Opt-in one-way Notion planning pull, v0.14. The local enable flag lives in
+// SP's per-device secret store and is NEVER copied by SuperSync. It is not a
+// password; this storage is used because the official plugin API provides no
+// other per-device persistence primitive. Notion tokens stay local separately.
+//
+// Only individually seeded Notion-page/SP-task baseline IDs are eligible.
+// No import, no Notion writes, no timer control or automatic bidirectional sync.
+const ALF_AUTO_PLAN_FLAG = 'alf-auto-plan-local-enabled-v1';
+const ALF_AUTO_PLAN_BASELINE_PREFIX = 'alf-plan-anchor-v1-';
+const ALF_AUTO_PLAN_MAPPING_KEY = 'alf-mapping-v2';
+const ALF_AUTO_PLAN_LINK_PREFIX = 'alf-page-link-';
+const ALF_AUTO_PLAN_CHECK_MS = 10 * 60 * 1000;
+const ALF_AUTO_PLAN_TASKS_PER_CYCLE = 8;
+
+function alfAutoUuid(value) {
+  return String(value || '').replace(/-/g, '').toLowerCase();
+}
+function alfAutoEqual(a, b) {
+  return (a == null ? null : a) === (b == null ? null : b);
+}
+function alfAutoPlanSpec(c) {
+  if (!c || c.version !== 2) throw new Error('Unsupported Alf mapping format');
+  const sourceId = alfAutoUuid(c.taskSource);
+  if (!/^[0-9a-f]{32}$/.test(sourceId)) throw new Error('Missing Notion task data source');
+  const allowed = String(c.typeValues || '').split(',').map(x => x.trim()).filter(Boolean).sort();
+  if (!c.titleProp || !c.typeProp || !allowed.length)
+    throw new Error('Configure Notion task title and type mapping');
+  if (!['minutes', 'hours'].includes(c.unit))
+    throw new Error('Notion estimate unit must be explicit');
+  const ids = {}, input = {};
+  for (const key of ['titleProp', 'typeProp', 'estimateProp', 'executionProp']) {
+    input[key] = c[key] || '';
+    const b = c.taskPropertyBindings && c.taskPropertyBindings[key];
+    ids[key] = b && b.input === input[key] && b.sourceId === sourceId &&
+      typeof b.id === 'string' ? b.id : '';
+    if (input[key] && !ids[key])
+      throw new Error('Stable task property ID required for automatic planning: ' + key);
+  }
+  return {sourceId, input, ids, unit:c.unit, allowed};
+}
+function alfAutoProp(schemaOrPage, id) {
+  if (!id) return null;
+  const props = schemaOrPage && (schemaOrPage.properties || schemaOrPage) || {};
+  const matches = Object.keys(props).filter(name => props[name] && props[name].id === id);
+  return matches.length === 1 ? props[matches[0]] : null;
+}
+function alfAutoValidateSchema(schema, spec) {
+  const expected = {titleProp:['title'], typeProp:['select','multi_select'],
+    estimateProp:['number'], executionProp:['date']};
+  for (const key of Object.keys(expected)) {
+    if (!spec.input[key]) continue;
+    const field = alfAutoProp(schema, spec.ids[key]);
+    if (!field || !expected[key].includes(field.type))
+      throw new Error('Pinned Notion property unavailable or wrong type: ' + key);
+  }
+}
+function alfAutoNotionPlan(page, spec) {
+  const titleProp = alfAutoProp(page, spec.ids.titleProp);
+  const title = titleProp && Array.isArray(titleProp.title)
+    ? titleProp.title.map(x => x.plain_text || (x.text && x.text.content) || '').join('')
+    : '';
+  if (!title.trim()) throw new Error('Missing Notion task title');
+  const result = {title};
+  if (spec.input.estimateProp) {
+    const field = alfAutoProp(page, spec.ids.estimateProp);
+    if (!field || field.type !== 'number') throw new Error('Invalid Notion estimate property');
+    if (field.number !== null && field.number !== undefined) {
+      const n = field.number;
+      if (typeof n !== 'number' || !Number.isFinite(n) || n < 0)
+        throw new Error('Invalid Notion time estimate');
+      const ms = Math.round(n * (spec.unit === 'minutes' ? 60000 : 3600000));
+      if (!Number.isSafeInteger(ms)) throw new Error('Estimate exceeds safe range');
+      result.timeEstimate = ms;
+    }
+  }
+  if (spec.input.executionProp) {
+    const field = alfAutoProp(page, spec.ids.executionProp);
+    if (!field || field.type !== 'date') throw new Error('Invalid Notion execution property');
+    if (field.date && field.date.start) {
+      if (field.date.end) throw new Error('Notion date ranges have no auto-sync policy');
+      const day = String(field.date.start);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+        const parsed = new Date(day + 'T00:00:00.000Z');
+        if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0,10) !== day)
+          throw new Error('Invalid Notion calendar date');
+        result.dueDay = day;
+        result.dueWithTime = null;
+      } else {
+        if (!/(Z|[+-]\d{2}:\d{2})$/i.test(day))
+          throw new Error('Notion timestamp must carry an explicit timezone offset');
+        const ms = Date.parse(day);
+        if (!Number.isFinite(ms)) throw new Error('Invalid Notion timestamp');
+        result.dueDay = null;
+        result.dueWithTime = ms;
+      }
+    }
+  }
+  return result;
+}
+function alfAutoAllowedType(page, spec) {
+  const field = alfAutoProp(page, spec.ids.typeProp);
+  if (!field) return false;
+  const values = field.type === 'multi_select'
+    ? (field.multi_select || []).map(x => x.name)
+    : field.type === 'select' && field.select ? [field.select.name] : [];
+  return values.some(value => spec.allowed.includes(value));
+}
+function alfAutoCurrentPlan(task) {
+  return {title:task.title,
+    timeEstimate:typeof task.timeEstimate === 'number' ? task.timeEstimate : null,
+    dueDay:task.dueDay ?? null, dueWithTime:task.dueWithTime ?? null};
+}
+function alfAutoTaskMatches(task,anchor) {
+  if(!task || task.id !== anchor.spId || task.isDone === true || task.repeatCfgId ||
+    (task.projectId ?? null) !== anchor.projectId ||
+    (task.parentId ?? null) !== anchor.parentId ||
+    typeof task.notes !== 'string') return false;
+  return task.notes.split(/\s+/).includes('alf-notion-page-id:'+anchor.notionId);
+}
+function alfCreateAutoPlanSync(api, options) {
+  const opts=options || {}, maxBatch=opts.maxBatch || ALF_AUTO_PLAN_TASKS_PER_CYCLE;
+  let cursor=0, busy=false, lastRun=0, interval=null;
+  async function notion(token, path) {
+    return api.request('https://api.notion.com/v1'+path, {
+      method:'GET',
+      headers:{'Authorization':'Bearer '+token,'Notion-Version':'2026-03-11',
+        'Content-Type':'application/json'},
+      timeout:30000,responseType:'json'
+    });
+  }
+  async function runOnce() {
+    const stats={enabled:false,processed:0,updated:0,skipped:0,conflicts:0,errors:0};
+    if(typeof api.getSecret!=='function' ||
+       await api.getSecret(ALF_AUTO_PLAN_FLAG)!=='enabled') return stats;
+    stats.enabled=true;
+    if(typeof api.request!=='function' || typeof api.getTasks!=='function' ||
+       typeof api.getArchivedTasks!=='function' ||
+       typeof api.loadSyncedData!=='function' ||
+       typeof api.listSyncedDataKeys!=='function' ||
+       typeof api.updateTask!=='function' ||
+       typeof api.persistDataSynced!=='function') {
+      stats.errors++;return stats;
+    }
+    const token=await api.getSecret('alf-notion-token');
+    if(!token){stats.errors++;return stats;}
+    let spec,allKeys,source;
+    try {
+      const raw=await api.loadSyncedData(ALF_AUTO_PLAN_MAPPING_KEY);
+      spec=alfAutoPlanSpec(raw?JSON.parse(raw):null);
+      allKeys=await api.listSyncedDataKeys(ALF_AUTO_PLAN_BASELINE_PREFIX);
+      if(!Array.isArray(allKeys))throw new Error('Invalid Notion planning anchor inventory');
+      allKeys=allKeys.filter(k=>typeof k==='string'&&k.startsWith(ALF_AUTO_PLAN_BASELINE_PREFIX)).sort();
+      if(!allKeys.length)return stats;
+      source=await notion(token,'/data_sources/'+encodeURIComponent(spec.sourceId));
+      alfAutoValidateSchema(source&&source.properties||{},spec);
+    } catch (_) {stats.errors++;return stats;}
+    const active=await api.getTasks() || [];
+    const archived=await api.getArchivedTasks() || [];
+    // Round-robin anchored tasks, bounded per cycle to avoid rate-limit bursts.
+    const count=Math.min(maxBatch,allKeys.length);
+    for (let i=0;i<count;i++) {
+      const key=allKeys[(cursor+i)%allKeys.length];
+      stats.processed++;
+      try {
+        const raw=await api.loadSyncedData(key);
+        if(!raw){stats.skipped++;continue;}
+        const anchor=JSON.parse(raw);
+        if(!anchor || anchor.version!==1 ||
+          !/^[0-9a-f]{32}$/.test(alfAutoUuid(anchor.notionId)) ||
+          key!==ALF_AUTO_PLAN_BASELINE_PREFIX+anchor.notionId ||
+          anchor.sourceId!==spec.sourceId ||
+          anchor.spec!==JSON.stringify(spec) ||
+          !anchor.expected || typeof anchor.expected.title!=='string') {
+          stats.skipped++;continue;
+        }
+        const candidates=[...active,...archived].filter(t=>
+          t&&typeof t.notes==='string'&&
+          t.notes.split(/\s+/).includes('alf-notion-page-id:'+anchor.notionId));
+        if(candidates.length!==1 || !active.some(t=>t.id===anchor.spId) ||
+           !alfAutoTaskMatches(candidates[0],anchor)) {
+          stats.conflicts++;continue;
+        }
+        const linkRaw=await api.loadSyncedData(ALF_AUTO_PLAN_LINK_PREFIX+anchor.notionId);
+        const link=linkRaw?JSON.parse(linkRaw):null;
+        if(!link||link.notionId!==anchor.notionId||link.spId!==anchor.spId) {
+          stats.conflicts++;continue;
+        }
+        const page=await notion(token,'/pages/'+encodeURIComponent(anchor.notionId));
+        if(!page || page.object!=='page' || page.in_trash ||
+          alfAutoUuid(page.id)!==alfAutoUuid(anchor.notionId) ||
+          alfAutoUuid(page.parent&&page.parent.data_source_id)!==spec.sourceId ||
+          !alfAutoAllowedType(page,spec)) {
+          stats.conflicts++;continue;
+        }
+        const desired=alfAutoNotionPlan(page,spec),task=candidates[0];
+        const current=alfAutoCurrentPlan(task),update={};
+        let conflict=false;
+        for(const name of ['title','timeEstimate','dueDay','dueWithTime']) {
+          const before=anchor.expected[name] ?? null,local=current[name]??null;
+          const expected=Object.prototype.hasOwnProperty.call(desired,name)
+            ? desired[name] : before;
+          if(!alfAutoEqual(local,before) && !alfAutoEqual(local,expected)) {
+            conflict=true;break;
+          }
+          if(Object.prototype.hasOwnProperty.call(desired,name) &&
+             !alfAutoEqual(local,expected))update[name]=expected;
+        }
+        if(conflict){stats.conflicts++;continue;}
+        if(Object.keys(update).length) {
+          // Recheck SP state and link immediately before any local update.
+          const nowTasks=await api.getTasks()||[];
+          const latest=nowTasks.find(t=>t&&t.id===anchor.spId);
+          const latestPlan=latest&&alfAutoCurrentPlan(latest);
+          const currentNames=['title','timeEstimate','dueDay','dueWithTime'];
+          if(!alfAutoTaskMatches(latest,anchor) ||
+            currentNames.some(k=>!alfAutoEqual(latestPlan[k],current[k])) ||
+            (await api.loadSyncedData(ALF_AUTO_PLAN_LINK_PREFIX+anchor.notionId))!==linkRaw ||
+            (await api.loadSyncedData(key))!==raw) {
+            stats.conflicts++;continue;
+          }
+          // No timeSpent, status, tag, notes, project, parent or Notion writes.
+          await api.updateTask(anchor.spId,update,{isIgnoreShortSyntax:true});
+          stats.updated++;
+        } else {stats.skipped++;}
+        const expected=Object.assign({},current,update);
+        if(JSON.stringify(expected)!==JSON.stringify(anchor.expected)) {
+          const next=Object.assign({},anchor,{expected});
+          // If SP write succeeded but anchor persistence fails, next cycle
+          // detects a local mismatch and safely refuses replay until re-seeded.
+          await api.persistDataSynced(JSON.stringify(next),key);
+        }
+      } catch (_) {stats.errors++;}
+    }
+    cursor=(cursor+count)%allKeys.length;
+    if(stats.updated && api.log && typeof api.log.info==='function')
+      api.log.info('[Alf] Opt-in Notion planning refreshed '+stats.updated+' linked SP tasks');
+    return stats;
+  }
+  async function heartbeat() {
+    if(busy)return;
+    const now=Date.now();
+    if(lastRun && now-lastRun < ALF_AUTO_PLAN_CHECK_MS)return;
+    busy=true;
+    try {
+      // Disabled devices do not open Notion connections or change SP tasks.
+      if(await api.getSecret(ALF_AUTO_PLAN_FLAG)!=='enabled')return;
+      lastRun=now;
+      await runOnce();
+    } catch (_) {
+      if(api.log&&typeof api.log.warn==='function')
+        api.log.warn('[Alf] Opt-in Notion planning check skipped');
+    } finally {busy=false;}
+  }
+  function start() {
+    if(interval!==null || typeof setInterval!=='function')return;
+    interval=setInterval(()=>{void heartbeat();},60000);
+    void heartbeat(); // enabled devices check once on app/plugin startup
+  }
+  function stop() {
+    if(interval!==null && typeof clearInterval==='function')clearInterval(interval);
+    interval=null;
+  }
+  return {runOnce,start,stop};
+}
+
+if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
+  const alfAutomaticPlan=alfCreateAutoPlanSync(PluginAPI);
+  PluginAPI.onReady(()=>alfAutomaticPlan.start());
+  if(typeof PluginAPI.onUnload==='function')
+    PluginAPI.onUnload(()=>alfAutomaticPlan.stop());
+}
