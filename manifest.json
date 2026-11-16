@@ -1,7 +1,7 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
   "description": "Notion-first local task/focus/habit integration with reviewed planning, opt-in time/Pomodoro/habit writeback with pinned habit property IDs (experimental alpha)",
