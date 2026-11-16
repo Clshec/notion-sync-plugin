@@ -631,16 +631,293 @@ function alfCreateAutoTimeSync(api,options) {
   return {runOnce,start,stop};
 }
 
+
+const ALF_AUTO_HABIT_FLAG='alf-auto-habit-local-enabled-v1';
+const ALF_AUTO_HABIT_PREFIX='alf-habit-auto-anchor-v1-';
+const ALF_AUTO_HABIT_LINK_PREFIX='alf-habit-definition-link-v1-';
+const ALF_AUTO_HABIT_PER_CYCLE=3;
+function alfAutoHabitSpec(c) {
+  if(!c||c.version!==2)throw new Error('Invalid Notion mapping');
+  const sourceId=alfAutoUuid(c.taskSource),habitSourceId=alfAutoUuid(c.habitSource);
+  if(!/^[a-f0-9]{32}$/.test(sourceId)||!/^[a-f0-9]{32}$/.test(habitSourceId))
+    throw new Error('Missing existing task/habit data source IDs');
+  if(!['count','minutes','hours'].includes(c.habitOccUnit)||!c.habitOccTypeValue)
+    throw new Error('Missing explicit existing habit type or unit');
+  const fields={
+    habitOccTypeProp:'typeId',habitOccRelationProp:'relationId',
+    habitOccDayProp:'dayId',habitOccCountProp:'countId'
+  },ids={};
+  for(const [input,output] of Object.entries(fields)) {
+    const group=c.habitPropertyBindings&&c.habitPropertyBindings.occurrences;
+    const b=group&&group[input];
+    if(!c[input]||!b||b.input!==c[input]||alfAutoUuid(b.sourceId)!==sourceId||
+       typeof b.id!=='string'||!b.id)
+      throw new Error('Stable pinned Notion habit occurrence field required: '+input);
+    ids[output]=b.id;
+  }
+  return {sourceId,habitSourceId,ids,
+    typeValue:c.habitOccTypeValue,unit:c.habitOccUnit};
+}
+function alfAutoHabitCompatible(counter,day,unit) {
+  if(!counter || counter.isEnabled===false || !counter.countOnDay)return null;
+  const raw=counter.countOnDay[day];
+  if(!Number.isSafeInteger(raw)||raw<=0)return null;
+  if(unit==='count'){
+    if(counter.type!=='ClickCounter')return null;
+    return {raw,value:raw};
+  }
+  if(counter.type!=='StopWatch')return null;
+  const divisor=unit==='minutes'?60000:3600000;
+  const value=Math.round((raw/divisor)*1000000)/1000000;
+  return Number.isFinite(value)&&value>0?{raw,value}:null;
+}
+function alfAutoHabitPageInfo(page,spec,day) {
+  if(!page||page.object!=='page'||page.in_trash)return null;
+  const kind=alfAutoProp(page,spec.ids.typeId);
+  const names=kind&&kind.type==='multi_select'?
+    (kind.multi_select||[]).map(x=>x.name):
+    kind&&kind.type==='select'&&kind.select?[kind.select.name]:[];
+  if(!names.includes(spec.typeValue))return null;
+  const date=alfAutoProp(page,spec.ids.dayId);
+  if(!date||date.type!=='date'||!date.date||date.date.start!==day||date.date.end)
+    return null;
+  const rel=alfAutoProp(page,spec.ids.relationId);
+  if(!rel||rel.type!=='relation'||!Array.isArray(rel.relation)||
+     rel.relation.length!==1||rel.has_more===true||
+     !rel.relation[0]||!rel.relation[0].id)return null;
+  const number=alfAutoProp(page,spec.ids.countId);
+  if(!number||number.type!=='number'||!(number.number===null||
+     (typeof number.number==='number'&&Number.isFinite(number.number)&&number.number>=0)))
+    return null;
+  return {habitId:rel.relation[0].id,before:number.number};
+}
+function alfAutoHabitSameNumber(a,b) {
+  return a===b||(typeof a==='number'&&typeof b==='number'&&
+    Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<0.000001);
+}
+function alfCreateAutoHabitSync(api,options) {
+  const opts=options||{},limit=opts.maxBatch||ALF_AUTO_HABIT_PER_CYCLE;
+  let cursor=0,busy=false,lastRun=0,interval=null;
+  async function notion(token,path,method,body){
+    const req={method:method||'GET',
+      headers:{'Authorization':'Bearer '+token,'Notion-Version':'2026-03-11',
+        'Content-Type':'application/json'},
+      timeout:30000,responseType:'json'};
+    if(body!==undefined)req.body=body;
+    return api.request('https://api.notion.com/v1'+path,req);
+  }
+  async function queryDay(token,spec,day,kind) {
+    const t={property:spec.ids.typeId};
+    t[kind]={};
+    t[kind][kind==='select'?'equals':'contains']=spec.typeValue;
+    const filter={and:[t,{property:spec.ids.dayId,date:{equals:day}}]};
+    const pages=[];let cursor=null,truncated=false;
+    do {
+      const body={filter,page_size:Math.min(100,300-pages.length)};
+      if(cursor)body.start_cursor=cursor;
+      const data=await notion(token,'/data_sources/'+encodeURIComponent(spec.sourceId)+'/query','POST',body);
+      if(!data||!Array.isArray(data.results))throw new Error('Invalid Notion habit-day query');
+      pages.push(...data.results);
+      cursor=data.has_more?data.next_cursor:null;
+      if(pages.length>=300){truncated=!!cursor;break;}
+    }while(cursor);
+    if(truncated)throw new Error('Truncated existing Notion habit-day inventory');
+    return pages;
+  }
+  function groupCurrent(pages,spec,day){
+    const grouped=new Map();
+    for(const page of pages) {
+      const info=alfAutoHabitPageInfo(page,spec,day);
+      if(!info)continue;
+      const k=alfAutoUuid(info.habitId);
+      if(!grouped.has(k))grouped.set(k,[]);
+      grouped.get(k).push({page,info});
+    }
+    return grouped;
+  }
+  async function runOnce() {
+    const stats={enabled:false,day:null,processed:0,written:0,anchored:0,
+      unchanged:0,conflicts:0,errors:0};
+    if(typeof api.getSecret!=='function'||
+       await api.getSecret(ALF_AUTO_HABIT_FLAG)!=='enabled')return stats;
+    stats.enabled=true;
+    if(['request','getAppState','getDayContext','loadSyncedData',
+      'persistDataSynced','listSyncedDataKeys'].some(k=>typeof api[k]!=='function')){
+      stats.errors++;return stats;
+    }
+    const token=await api.getSecret('alf-notion-token');
+    if(!token){stats.errors++;return stats;}
+    let spec,kind,day,allPages,linksById,duplicateCounters;
+    try {
+      const configRaw=await api.loadSyncedData(ALF_AUTO_PLAN_MAPPING_KEY);
+      spec=alfAutoHabitSpec(configRaw?JSON.parse(configRaw):null);
+      const ctx=await api.getDayContext();
+      day=ctx&&ctx.todayStr;
+      if(typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day))
+        throw new Error('SP logical day unavailable');
+      stats.day=day;
+      const schema=await notion(token,'/data_sources/'+encodeURIComponent(spec.sourceId));
+      const expected={typeId:['select','multi_select'],relationId:['relation'],
+        dayId:['date'],countId:['number']};
+      for(const [k,allowed] of Object.entries(expected)) {
+        const p=alfAutoProp(schema&&schema.properties||{},spec.ids[k]);
+        if(!p||!allowed.includes(p.type))throw new Error('Notion habit property ID changed');
+        if(k==='typeId')kind=p.type;
+      }
+      const keys=await api.listSyncedDataKeys(ALF_AUTO_HABIT_LINK_PREFIX);
+      if(!Array.isArray(keys))throw new Error('Invalid habit mapping list');
+      linksById=new Map();duplicateCounters=new Set();
+      const counterOwners=new Map();
+      for(const key of keys) {
+        if(typeof key!=='string'||!key.startsWith(ALF_AUTO_HABIT_LINK_PREFIX))continue;
+        const raw=await api.loadSyncedData(key);
+        if(!raw)continue;
+        try {
+          const link=JSON.parse(raw);
+          if(!link||link.version!==1||typeof link.spCounterId!=='string'||
+             !link.spCounterId||typeof link.notionId!=='string'||
+             key!==ALF_AUTO_HABIT_LINK_PREFIX+link.notionId||
+             alfAutoUuid(link.notionSourceId)!==spec.habitSourceId)continue;
+          const id=alfAutoUuid(link.notionId);
+          if(linksById.has(id)) {linksById.set(id,null);continue;}
+          linksById.set(id,{link,raw,key});
+          const prior=counterOwners.get(link.spCounterId);
+          if(prior&&prior!==id)duplicateCounters.add(link.spCounterId);
+          counterOwners.set(link.spCounterId,id);
+        }catch(_){/* invalid link ignored, no write */}
+      }
+      allPages=await queryDay(token,spec,day,kind);
+    }catch(_){stats.errors++;return stats;}
+    const initialGroups=groupCurrent(allPages,spec,day),items=[...initialGroups.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
+    if(!items.length)return stats;
+    const state=await api.getAppState(),counters=state&&state.simpleCounters||{};
+    const count=Math.min(limit,items.length);
+    for(let i=0;i<count;i++){
+      const [habitKey,group]=items[(cursor+i)%items.length];
+      stats.processed++;
+      if(group.length!==1){stats.conflicts++;continue;}
+      const {page,info}=group[0],ref=linksById.get(habitKey);
+      if(!ref||duplicateCounters.has(ref.link.spCounterId)){stats.conflicts++;continue;}
+      const countData=alfAutoHabitCompatible(counters[ref.link.spCounterId],day,spec.unit);
+      if(!countData){stats.unchanged++;continue;}
+      try {
+        const anchorKey=ALF_AUTO_HABIT_PREFIX+page.id;
+        const rawAnchor=await api.loadSyncedData(anchorKey);
+        const anchor=rawAnchor?JSON.parse(rawAnchor):null;
+        const before=info.before;
+        if(anchor) {
+          if(anchor.version!==1||anchor.pageId!==page.id ||
+             alfAutoUuid(anchor.habitId)!==habitKey ||
+             anchor.counterId!==ref.link.spCounterId||
+             anchor.sourceId!==spec.sourceId||
+             anchor.spec!==JSON.stringify(spec)||anchor.day!==day ||
+             !alfAutoHabitSameNumber(anchor.expectedNumber,before) ||
+             !Number.isSafeInteger(anchor.expectedRaw)||countData.raw<anchor.expectedRaw) {
+            stats.conflicts++;continue;
+          }
+        } else if(!(before===null||before===0||
+          alfAutoHabitSameNumber(before,countData.value))) {
+          // No adopted baseline for this existing positive Notion count.
+          // Never silently overwrite manual/historical progress.
+          stats.conflicts++;continue;
+        }
+        if(before!==null && before>countData.value+0.000001){
+          stats.conflicts++;continue;
+        }
+        const needsWrite=before===null || countData.value>before+0.000001;
+        if(!needsWrite) {
+          if(!anchor){
+            const next={version:1,pageId:page.id,habitId:info.habitId,
+              counterId:ref.link.spCounterId,sourceId:spec.sourceId,
+              spec:JSON.stringify(spec),day,expectedNumber:before,
+              expectedRaw:countData.raw};
+            await api.persistDataSynced(JSON.stringify(next),anchorKey);
+            stats.anchored++;
+          } else {stats.unchanged++;}
+          continue;
+        }
+        // Re-read whole day to avoid silently PATCHing a duplicate created
+        // after initial preview on this or another device.
+        const freshRows=await queryDay(token,spec,day,kind);
+        const freshGroup=groupCurrent(freshRows,spec,day).get(habitKey)||[];
+        if(freshGroup.length!==1||freshGroup[0].page.id!==page.id){
+          stats.conflicts++;continue;
+        }
+        const latest=await notion(token,'/pages/'+encodeURIComponent(page.id));
+        if(!latest||alfAutoUuid(latest.id)!==alfAutoUuid(page.id)||
+           alfAutoUuid(latest.parent&&latest.parent.data_source_id)!==spec.sourceId){
+          stats.conflicts++;continue;
+        }
+        const pageInfo=alfAutoHabitPageInfo(latest,spec,day);
+        if(!pageInfo || alfAutoUuid(pageInfo.habitId)!==habitKey ||
+           !alfAutoHabitSameNumber(pageInfo.before,before)){
+          stats.conflicts++;continue;
+        }
+        const newState=await api.getAppState();
+        const latestCount=alfAutoHabitCompatible(newState&&newState.simpleCounters&&
+          newState.simpleCounters[ref.link.spCounterId],day,spec.unit);
+        if(!latestCount||latestCount.raw!==countData.raw ||
+           await api.loadSyncedData(ref.key)!==ref.raw ||
+           await api.loadSyncedData(anchorKey)!==rawAnchor ||
+           await api.getSecret(ALF_AUTO_HABIT_FLAG)!=='enabled'){
+          stats.conflicts++;continue;
+        }
+        const patch={properties:{}};
+        patch.properties[spec.ids.countId]={number:countData.value};
+        const response=await notion(token,'/pages/'+encodeURIComponent(page.id),'PATCH',patch);
+        if(!response||response.object!=='page'||
+           alfAutoUuid(response.id)!==alfAutoUuid(page.id))
+          throw new Error('Notion habit-day update not confirmed');
+        stats.written++;
+        const next={version:1,pageId:page.id,habitId:info.habitId,
+          counterId:ref.link.spCounterId,sourceId:spec.sourceId,
+          spec:JSON.stringify(spec),day,
+          expectedNumber:countData.value,expectedRaw:countData.raw};
+        await api.persistDataSynced(JSON.stringify(next),anchorKey);
+      }catch(_){stats.errors++;}
+    }
+    cursor=(cursor+count)%items.length;
+    return stats;
+  }
+  async function heartbeat() {
+    if(busy)return;
+    const now=Date.now();
+    if(lastRun&&now-lastRun<ALF_AUTO_PLAN_CHECK_MS)return;
+    busy=true;
+    try {
+      if(await api.getSecret(ALF_AUTO_HABIT_FLAG)!=='enabled')return;
+      lastRun=now;
+      await runOnce();
+    }catch(_) {
+      if(api.log&&typeof api.log.warn==='function')
+        api.log.warn('[Alf] Automatic existing habit-day export skipped');
+    }finally{busy=false;}
+  }
+  function start() {
+    if(interval!==null||typeof setInterval!=='function')return;
+    interval=setInterval(()=>{void heartbeat();},60000);
+    void heartbeat();
+  }
+  function stop(){
+    if(interval!==null&&typeof clearInterval==='function')clearInterval(interval);
+    interval=null;
+  }
+  return {runOnce,start,stop};
+}
+
 if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
   const alfAutomaticPlan=alfCreateAutoPlanSync(PluginAPI);
   const alfAutomaticTime=alfCreateAutoTimeSync(PluginAPI);
+  const alfAutomaticHabits=alfCreateAutoHabitSync(PluginAPI);
   PluginAPI.onReady(()=>{
     alfAutomaticPlan.start();
     alfAutomaticTime.start();
+    alfAutomaticHabits.start();
   });
   if(typeof PluginAPI.onUnload==='function')
     PluginAPI.onUnload(()=>{
       alfAutomaticPlan.stop();
       alfAutomaticTime.stop();
+      alfAutomaticHabits.stop();
     });
 }

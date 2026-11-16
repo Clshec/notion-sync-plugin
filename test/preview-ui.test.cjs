@@ -1402,3 +1402,46 @@ test('mismatched or parent task SP tracked time never seeds an automated Notion 
   assert.match(env.els('autoTimeSeedReport').textContent,/0 matching time baselines/);
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
 });
+
+test('automatic habit-day export requires separate consent and a current pinned preview',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.match(env.els('notice').textContent,/Explicitly authorize ongoing/);
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.match(env.els('notice').textContent,/Preview current existing habit-day rows/);
+  await env.els('previewHabitDay').events.click();
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),'enabled');
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0,
+    'enabling automatic habits must not write to Notion');
+  assert.equal(env.stores.filter(x=>x.key==='alf-auto-habit-local-enabled-v1').length,0,
+    'enabled flag must never go to SuperSync');
+  await env.els('disableAutoHabitsBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
+});
+
+test('changing SP logical day after habit preview refuses enabling auto habit export',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  env.setLogicalDay('2026-11-17');
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
+  assert.match(env.els('notice').textContent,/SP logical day changed/);
+});
+
+test('habit auto enable refuses changed mapping since reviewed habit-day page query',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  env.els('habitOccUnit').value='hours';
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
+  assert.match(env.els('notice').textContent,/Preview current existing habit-day rows/);
+});
