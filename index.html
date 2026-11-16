@@ -80,6 +80,12 @@ code {font:inherit;white-space:nowrap}
     <label>Estimated time property (Number) <input id="estimateProp" placeholder="e.g. Planned Time / الوقت المخطط له"></label>
     <label>Actual tracked time property (Number) <input id="actualProp" placeholder="e.g. Actual Time / الوقت الفعلي"></label>
     <label>Status property (Status or Select) <input id="statusProp" placeholder="e.g. Status"></label>
+    <label>Status names indicating completion (comma separated; optional)
+      <input id="completedValues" placeholder="e.g. Done, Completed"></label>
+    <label>Priority property (Select; optional) <input id="priorityProp" placeholder="e.g. Priority"></label>
+    <label>High priority option names <input id="priorityHigh" placeholder="e.g. High, عاجل"></label>
+    <label>Medium priority option names <input id="priorityMedium" placeholder="e.g. Medium, متوسط"></label>
+    <label>Low priority option names <input id="priorityLow" placeholder="e.g. Low, منخفض"></label>
     <label>Project relation property (optional) <input id="projectProp" placeholder="e.g. Project / العنصر الفرعي"></label>
     <label>Bundle parent relation property (optional) <input id="parentProp" placeholder="e.g. Parent Task / الحزمة الأب"></label>
     <label>Time unit for Notion number properties
@@ -126,10 +132,10 @@ code {font:inherit;white-space:nowrap}
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
-    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','projectProp','parentProp','unit'];
+    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit'];
   var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
     deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],
-    statusProp:['status','select'],projectProp:['relation'],parentProp:['relation']};
+    statusProp:['status','select'],priorityProp:['select'],projectProp:['relation'],parentProp:['relation']};
   var ui = function (id) { return document.getElementById(id); };
   var active = false;
 
@@ -365,6 +371,27 @@ code {font:inherit;white-space:nowrap}
       throw new Error('Invalid time estimate for Notion task');
     return x*(config.unit==='minutes'?60000:3600000);
   }
+
+  function splitValues(text) {
+    return String(text||'').split(',').map(function(v){return v.trim();}).filter(Boolean);
+  }
+  function completedFromNotion(page,config) {
+    if (!config.statusProp || !config.completedValues) return false;
+    var name=statusValue((page.properties||{})[config.statusProp]);
+    return splitValues(config.completedValues).includes(name);
+  }
+  function priorityFromNotion(page,config) {
+    if (!config.priorityProp) return null;
+    var p=(page.properties||{})[config.priorityProp];
+    var value=p && p.select ? p.select.name : '';
+    if (!value) return null;
+    if (splitValues(config.priorityHigh).includes(value)) return 3;
+    if (splitValues(config.priorityMedium).includes(value)) return 2;
+    if (splitValues(config.priorityLow).includes(value)) return 1;
+    // Unmapped options must NOT become arbitrary priority values.
+    return null;
+  }
+
   function importOrder(pages,c) {
     var chosen=new Map(pages.map(function(p){return [p.id,p];}));
     var visiting=new Set(), done=new Set(), ordered=[];
@@ -454,7 +481,7 @@ code {font:inherit;white-space:nowrap}
           var estimate=estimateValue(page,config);
           var payload={
             title:title,projectId:projectId,notes:marker,
-            isIgnoreShortSyntax:true
+            isIgnoreShortSyntax:true,isDone:completedFromNotion(page,config)
           };
           if (parent) {
             var spParent=allTasks.find(function(t){return t.id===parentSpId;});
@@ -472,6 +499,8 @@ code {font:inherit;white-space:nowrap}
           if (due.dueWithTime!==undefined) updates.dueWithTime=due.dueWithTime;
           if (deadline.deadlineDay) updates.deadlineDay=deadline.deadlineDay;
           if (deadline.deadlineWithTime!==undefined) updates.deadlineWithTime=deadline.deadlineWithTime;
+          var priority=priorityFromNotion(page,config);
+          if (priority!==null) updates.priority=priority;
           if (Object.keys(updates).length) await PluginAPI.updateTask(spId,updates);
           stats.created++;
         } catch(e) {
