@@ -62,6 +62,7 @@ function mount(customRows, habitRows) {
     async setSecret(k,v) {secretWrites.push([k,v]); secret=v;},
     async deleteSecret() {secret=null;},
     async loadSyncedData(k) {return stored.get(k) || null;},
+    async listSyncedDataKeys(prefix) {return [...stored.keys()].filter(k=>k.startsWith(prefix));},
     async persistDataSynced(v,k) { stores.push({data:v,key:k}); stored.set(k,v); },
     async getTasks() { return existingTasks; },
     async getArchivedTasks() { return []; },
@@ -712,4 +713,66 @@ test('removed pinned property ID fails closed instead of silently mapping to sam
   assert.match(env.els('notice').textContent,/Fix mapping/);
   assert.equal(env.requests.filter(x=>x.opts.method==='POST').length,0);
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('Pomodoro plan derives target from existing Notion estimate, never from completed sessions',async()=>{
+  const env=mount();
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  assert.equal(env.els('pomodoroWorkMinutes').value,'25');
+  assert.equal(env.els('results').children[0].children[8].textContent,'5');
+  assert.match(env.els('results').children[0].children[9].textContent,/compare after linking/);
+  assert.ok(!env.requests.some(x=>x.opts.method==='PATCH'));
+  env.els('pomodoroWorkMinutes').value='50';
+  await env.els('previewBtn').events.click();
+  assert.equal(env.els('results').children[0].children[8].textContent,'3');
+  assert.match(env.els('summary').textContent,/Work interval: 50m/);
+});
+
+test('invalid Pomodoro work interval refuses preview before any Notion query',async()=>{
+  const env=mount();
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('pomodoroWorkMinutes').value='0';
+  await env.els('previewBtn').events.click();
+  assert.match(env.els('notice').textContent,/Pomodoro work interval/);
+  assert.equal(env.requests.length,0);
+});
+
+test('verified observed sessions compare to linked Notion plan without fabricating history or writing',async()=>{
+  const env=mount();
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  env.els('targetSpProject').value='projectX';
+  env.els('authorizeImport').checked=true;
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1);
+  const spTaskId=env.existingTasks.at(-1).id;
+  const obs=[
+    {sessionId:'p1',taskId:spTaskId,mode:'Pomodoro',
+      observedCompletion:true,automatic:true,verifiedCompletedPomodoro:true},
+    {sessionId:'p2',taskId:spTaskId,mode:'Pomodoro',
+      observedCompletion:true,automatic:false,verifiedCompletedPomodoro:false},
+    {sessionId:'f1',taskId:spTaskId,mode:'Flowtime',
+      observedCompletion:true,automatic:false,verifiedCompletedPomodoro:false},
+    {sessionId:'c1',taskId:spTaskId,mode:'Countdown',
+      observedCompletion:true,automatic:false,verifiedCompletedPomodoro:false}
+  ];
+  for(const row of obs) await env.api.persistDataSynced(
+    JSON.stringify({schemaVersion:1,...row}), 'alf-focus-observed-v1-'+row.sessionId);
+  await env.els('loadSessions').events.click();
+  const cells=env.els('results').children[0].children;
+  assert.equal(cells[8].textContent,'5','the plan remains defined by Notion estimate');
+  assert.match(cells[9].textContent,/1 P · 1 F · 1 C observed/);
+  assert.match(cells[9].textContent,/history incomplete/);
+  assert.match(env.els('focusReport').textContent,/Verified automatically completed Pomodoros: 1/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0,
+    'reading focus observations must never write to Notion');
 });
