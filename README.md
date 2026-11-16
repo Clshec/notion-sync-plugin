@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.23 experimental Notion-first integration: three separately opted-in automatic paths (linked SP task planning pull, monotonic tracked actual time, explicitly approved existing habit-day counts) plus reviewed manual import and partial observed focus sessions. All automatic modes are OFF by default. This is not full or cross-device-safe bidirectional sync. Windows SP 20.0.0 isolated profile ZIP installation and plugin side-panel opening passed; live Notion and Android integration remain untested. Do not connect production Notion data yet.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.24 experimental Notion-first integration: three separately opted-in automatic paths (linked SP task planning pull, monotonic tracked actual time, explicitly approved existing habit-day counts) plus reviewed manual import and partial observed focus sessions. All automatic modes are OFF by default. This is not full or cross-device-safe bidirectional sync. Windows SP 20.0.0 isolated profile ZIP installation and plugin side-panel opening passed; live Notion and Android integration remain untested. Do not connect production Notion data yet.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,10 @@ The original safe manual workflow remains available alongside the newer opt-in b
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. CI uses mocked PluginAPI. **A real SP 20.0.0 Windows isolated ZIP installation and side-panel opening passed; real Notion API and Android integration are still pending.**
+
+### New v0.24: a single SP task must never claim multiple original Notion pages
+
+An SP task can have arbitrary editable text notes; previously a note containing **two exact** `alf-notion-page-id:` tokens pointing to distinct Notion pages could qualify for both pages, allowing duplicate tracked-time export or ambiguous planning. v0.24 rejects **any** SP task with multiple page ID tokens in manual import/relink, staged planning, time export, observed Pomodoro association and both automatic task engines. Only a unique, full, whitespace-delimited original page ID token together with its independent synced Notion↔SP page/task link is accepted. A separately authorized manual import still safely recovers a single valid missing ID link without creating another SP task; a task claiming two page IDs fails closed and is never adopted. Regression tests cover manual linking and both automatic plan/time paths. No production Notion or SP data was used.
 
 ### New v0.23: verified isolated Windows SP 20.0.0 plugin install and side-panel launch
 
