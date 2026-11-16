@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.5 experimental Notion preview, manual task import, manually confirmed actual-time writeback, and a conservative live focus-session observer. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.6 experimental Notion preview, manual SP task import, approved actual-time writeback, observed focus sessions, and user-configured links to existing Habit Tracker counters. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -54,6 +54,14 @@ Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSync
 - Each observation is stored under a distinct per-session synced metadata key. The UI has **Read locally observed focus sessions** to show counts by SP task ID. This does **not** change any Notion property.
 - **Limitations:** no historical backfill, no guarantee every SP session is observed, app restarts can interrupt the observer, task/mode ambiguity causes deliberate gaps, `completedDuration` is usually unavailable in the action itself, and these counts must not be pushed as authoritative Notion analytics until validated by a proper structured official SP session API.
 - See [session observer architecture and upstream API proposal](docs/architecture/observed-focus-sessions.md).
+
+### New v0.6: habit definition mapping (not daily habit synchronization yet)
+
+- The user specifies the **existing** Notion habit-definition data source ID, title property and optional cadence Select property; the plugin performs **read-only** schema discovery and paginated preview.
+- Existing SP Habit Tracker SimpleCounters are read from `PluginAPI.getAppState().simpleCounters`, without modifying the counters or creating a new one.
+- The user picks the **specific existing counter** to link to each Notion habit. The linkage is stored as keyed plugin metadata using Notion habit page ID + SP counter ID. No Notion database, page, habit occurrence or field is created.
+- The preview can display today's **device-local** counter count, but that value is **not** currently pushed to Notion; date handling needs the app's configurable logical-day semantics in a later phase.
+- See [habit definition & counter mapping architecture](docs/architecture/habit-mapping.md). This mapping is only a foundation for actual habit-day reconciliation.
 
 ## Architecture and design contracts
 

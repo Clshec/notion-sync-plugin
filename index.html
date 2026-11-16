@@ -55,7 +55,7 @@ code {font:inherit;white-space:nowrap}
     <label>Projects data source ID (optional, future phase)
       <input id="projectSource" spellcheck="false" placeholder="Existing project source UUID">
     </label>
-    <label>Habits data source ID (optional, future phase)
+    <label>Existing Notion habit definitions data source ID (optional)
       <input id="habitSource" spellcheck="false" placeholder="Existing habit definition source UUID">
     </label>
   </div>
@@ -141,6 +141,20 @@ code {font:inherit;white-space:nowrap}
   <div class="actions"><button id="loadSessions">Read locally observed focus sessions</button></div>
   <pre id="focusReport" style="white-space:pre-wrap;max-height:270px;overflow:auto"></pre>
 </section>
+<section>
+  <h2>7. Notion habit definitions ↔ existing SP Habit Tracker</h2>
+  <p>Read your existing Notion habit definitions and show Super Productivity's existing habit counters. Link a Notion habit to an existing SP counter by exact IDs. This does not create a Notion database, a habit, an occurrence, or a counter. Habit-day sync remains a separate development step.</p>
+  <div class="grid">
+    <label>Habit title property (Title) <input id="habitTitleProp" placeholder="e.g. Habit / العادة"></label>
+    <label>Habit cadence property (optional; Select) <input id="habitCadenceProp" placeholder="e.g. Frequency / التكرار"></label>
+  </div>
+  <div class="actions"><button id="previewHabits">Preview definitions and SP counters (NO WRITES)</button></div>
+  <div class="table-wrap">
+    <table><thead><tr><th>Notion habit definition</th><th>Cadence</th><th>Existing SP counter to link</th><th>Today's local count</th></tr></thead><tbody id="habitRows"></tbody></table>
+  </div>
+  <p id="habitReport" role="status" aria-live="polite" class="muted"></p>
+  <div class="actions"><button id="saveHabitMappings">Save habit ID mappings only</button></div>
+</section>
 <footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release does not synchronize any changes.</footer>
 </main>
 <script>
@@ -151,11 +165,12 @@ code {font:inherit;white-space:nowrap}
   var lastVisibleRows = [];
   var lastPreviewConfig = null;
   var stagedTimeChanges = null;
+  var habitPreview = null;
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
-    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit'];
+    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','habitTitleProp','habitCadenceProp'];
   var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
     deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],
     statusProp:['status','select'],priorityProp:['select'],projectProp:['relation'],parentProp:['relation']};
@@ -175,7 +190,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','previewBtn','importBtn','planTimeBtn','pushTimeBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','previewBtn','importBtn','planTimeBtn','pushTimeBtn','previewHabits','saveHabitMappings'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -744,6 +759,128 @@ code {font:inherit;white-space:nowrap}
     finally {busy(false);}
   }
 
+
+  var HABIT_KEY_PREFIX='alf-habit-definition-link-v1-';
+  function habitLocalDay() {
+    var d=new Date();
+    return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),
+      String(d.getDate()).padStart(2,'0')].join('-');
+  }
+  function counterName(c) {
+    return c && typeof c.title==='string' ? c.title : '';
+  }
+  async function previewHabitDefinitions() {
+    if (active) return;
+    busy(true);
+    habitPreview=null;
+    ui('habitRows').replaceChildren();
+    try {
+      var c=getForm();
+      var id=dataSourceId(c.habitSource,false);
+      if (!c.habitTitleProp) throw new Error('Select an existing habit title property');
+      var source=await notion('/data_sources/'+encodeURIComponent(id));
+      var props=source.properties||{}, titleField=props[c.habitTitleProp];
+      if (!titleField || titleField.type!=='title')
+        throw new Error('Habit definition title field is missing or is not Title');
+      if (c.habitCadenceProp && (!props[c.habitCadenceProp] ||
+          !['select','multi_select'].includes(props[c.habitCadenceProp].type))) {
+        throw new Error('Habit cadence must be an existing Select/Multi-select property');
+      }
+      if (typeof PluginAPI.getAppState!=='function')
+        throw new Error('Super Productivity getAppState is needed to read Habit Tracker counters');
+      var state=await PluginAPI.getAppState();
+      var counters=Object.values(state && state.simpleCounters || {});
+      var habits=[],cursor,hasMore=false;
+      // Preview is bounded. Never auto-create habits, counters, or pages.
+      do {
+        var body={page_size:Math.min(100,150-habits.length)};
+        if (cursor) body.start_cursor=cursor;
+        var page=await notion('/data_sources/'+encodeURIComponent(id)+'/query','POST',body);
+        if (!page || !Array.isArray(page.results)) throw new Error('Invalid Notion habit query');
+        habits=habits.concat(page.results.filter(function(p){return p&&p.object==='page'&&!p.in_trash;}));
+        cursor=page.has_more?page.next_cursor:null;
+        if (habits.length>=150){hasMore=!!cursor;break;}
+      } while(cursor);
+      var today=habitLocalDay();
+      for(var habit of habits.slice(0,75)) {
+        var row=document.createElement('tr'), p=habit.properties||{};
+        appendCell(row,textValue(p[c.habitTitleProp]));
+        var cd=p[c.habitCadenceProp];
+        appendCell(row,cd&&cd.select?cd.select.name:
+          cd&&Array.isArray(cd.multi_select)?cd.multi_select.map(function(x){return x.name;}).join(', '):'');
+        var holder=document.createElement('td'),select=document.createElement('select');
+        select.className='habitCounterSelect';
+        select.dataset.notionId=habit.id;
+        var empty=document.createElement('option');empty.value='';
+        empty.textContent='Not linked';select.appendChild(empty);
+        counters.forEach(function(counter){
+          if (!counter || !counter.id) return;
+          var option=document.createElement('option');
+          option.value=counter.id;option.textContent=counterName(counter)||counter.id;
+          select.appendChild(option);
+        });
+        var raw=await PluginAPI.loadSyncedData(HABIT_KEY_PREFIX+habit.id);
+        if(raw) {
+          try {
+            var saved=JSON.parse(raw);
+            if(saved.notionId===habit.id && typeof saved.spCounterId==='string' &&
+                counters.some(function(x){return x.id===saved.spCounterId;})) {
+              select.value=saved.spCounterId;
+            }
+          } catch(e) { /* corrupt mapping simply not preselected */ }
+        }
+        holder.appendChild(select);
+        row.appendChild(holder);
+        var count=document.createElement('td');
+        var linked=counters.find(function(x){return x.id===select.value;});
+        count.textContent=linked&&linked.countOnDay&&
+          typeof linked.countOnDay[today]==='number'
+          ? String(linked.countOnDay[today]):'—';
+        row.appendChild(count);ui('habitRows').appendChild(row);
+      }
+      habitPreview={sourceId:id,cfg:JSON.stringify(c),
+        ids:habits.slice(0,75).map(function(h){return h.id;}),
+        counterIds:counters.map(function(x){return x.id;})};
+      ui('habitReport').textContent=habits.length+' existing Notion habit definitions read, '+
+        counters.length+' existing SP SimpleCounters available. Displaying '+Math.min(habits.length,75)+
+        (hasMore?'. More pages exist; this preview is capped.':'')+
+        '. Mapping changes affect only Alf metadata, never source records.';
+      message('Habit definitions and SP counters inspected. No Notion or SP changes were made.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function saveHabitMappings() {
+    if(active)return;
+    busy(true);
+    try {
+      var p=habitPreview,c=getForm();
+      if(!p || p.cfg!==JSON.stringify(c) || p.sourceId!==dataSourceId(c.habitSource,false))
+        throw new Error('Refresh habit preview after configuration changes');
+      var selectors=Array.prototype.slice.call(document.querySelectorAll('.habitCounterSelect'));
+      var chosen=selectors.filter(function(x){return !!x.value;});
+      if(!chosen.length)throw new Error('Select one or more existing SP counters to link');
+      // A counter belongs to at most one Notion habit definition in this
+      // workspace configuration. Refuse ambiguous double-linking.
+      var ids=chosen.map(function(x){return x.value;});
+      if(new Set(ids).size!==ids.length)
+        throw new Error('One SP counter cannot be linked to multiple Notion habit definitions');
+      var count=0;
+      for (var selector of chosen) {
+        var notionId=selector.dataset.notionId;
+        if (!p.ids.includes(notionId) || !p.counterIds.includes(selector.value))
+          throw new Error('Habit or counter identity changed since preview');
+        await PluginAPI.persistDataSynced(JSON.stringify({
+          version:1,notionId:notionId,spCounterId:selector.value,
+          notionSourceId:p.sourceId
+        }),HABIT_KEY_PREFIX+notionId);
+        count++;
+      }
+      ui('habitReport').textContent=count+' habit→counter ID mappings saved in Alf plugin data. No Notion habits, daily occurrences or SP counters were created or modified.';
+      message('Habit mapping saved. Definition sync and daily completion writeback are not enabled yet.');
+    } catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
   async function init() {
     try {
       var saved=await PluginAPI.loadSyncedData(CFG_KEY);
@@ -763,6 +900,8 @@ code {font:inherit;white-space:nowrap}
     ui('planTimeBtn').addEventListener('click',stageActualTime);
     ui('pushTimeBtn').addEventListener('click',commitActualTime);
     ui('loadSessions').addEventListener('click',showFocusSessions);
+    ui('previewHabits').addEventListener('click',previewHabitDefinitions);
+    ui('saveHabitMappings').addEventListener('click',saveHabitMappings);
     try {
       var projects=await PluginAPI.getAllProjects();
       var selector=ui('targetSpProject');
