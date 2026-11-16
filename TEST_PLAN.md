@@ -20,7 +20,7 @@ This test plan provides comprehensive testing procedures for the Notion Sync Plu
    - Properties: Name, Description, Areas
 
 ### API Configuration
-- **API Key**: `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`
+- **API Key**: `<REDACTED_NOTION_TOKEN_ROTATE_IMMEDIATELY>`
 - **API Version**: `2022-06-28`
 - **Databases**: Shared with integration (Edit permissions)
 
