@@ -71,3 +71,7 @@ Notion tracking reference: https://app.notion.com/p/41ab4a624b7d81dbbc28e1c57279
 - [Security](../../SECURITY.md)
 
 To convert these drafts to live Issues, enable Issues and re-run GitHub create_issue with the titles/criteria above; then link the resulting numbered URLs in this file and in Notion if requested.
+
+## v0.10 milestone: optional lower-bound observer writeback
+
+Implemented (experimental): explicit consented preview/PATCH into a **pre-existing, separately labeled observed Pomodoros Number property**; stable property ID, Notion item/source and SP task identity revalidation, session ID deduplication, monotonic-only values and 2,000-record safety ceiling. This remains a manual partial lower bound and **does not satisfy** P0 authoritative completed Pomodoros, historical backfill, Android offline delivery or automated sync criteria above. All schema changes remain the Notion user's responsibility; zero new databases or properties are made by the plugin.
