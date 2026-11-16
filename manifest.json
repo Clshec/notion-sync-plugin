@@ -1,10 +1,10 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
-  "description": "Notion-first tasks, observed focus sessions and opt-in mapping to existing SP Habit Tracker counters (experimental alpha)",
+  "description": "Notion-first local task/focus/habit integration with explicitly authorized actual work and habit-day writeback (experimental alpha)",
   "author": "Alf contributors; original Notion Sync Plugin by Alessio Lovato",
   "icon": "notion.svg",
   "iFrame": true,
