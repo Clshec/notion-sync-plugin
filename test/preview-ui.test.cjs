@@ -54,7 +54,8 @@ function mount(customRows, habitRows) {
     'Priority': { type: 'select' },
     'الوقت الفعلي': { type: 'number' },
     'قاعدة العادات': {type:'relation'},
-    'Habit Count': {type:'number'}
+    'Habit Count': {type:'number'},
+    'Observed Pomodoros (partial)': {type:'number',id:'obs-pomo-id'}
   };
   const api = {
     onReady(fn) { fn(); },
@@ -98,7 +99,8 @@ function mount(customRows, habitRows) {
         const [idOrName,field]=entries[0];
         const name=Object.keys(page.properties).find(n=>n===idOrName ||
           (page.properties[n] && page.properties[n].id===idOrName));
-        assert.ok(name==='الوقت الفعلي'||name==='Habit Count'||name==='Actual Time',
+        assert.ok(name==='الوقت الفعلي'||name==='Habit Count'||name==='Actual Time'||
+          name==='Observed Pomodoros (partial)',
           'Patch only an approved existing numeric field or its stable ID');
         assert.ok(typeof field.number==='number');
         page.properties[name]={...page.properties[name],type:'number',number:field.number};
@@ -775,4 +777,131 @@ test('verified observed sessions compare to linked Notion plan without fabricati
   assert.match(env.els('focusReport').textContent,/Verified automatically completed Pomodoros: 1/);
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0,
     'reading focus observations must never write to Notion');
+});
+
+function observedTestPage() {
+  return {object:'page',id:'pomotask-1',properties:{
+    'المصدر':{type:'title',title:[{plain_text:'Observed work'}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'مهمة'}]},
+    'الوقت المخطط له':{type:'number',number:2},
+    'Observed Pomodoros (partial)':{type:'number',number:0},
+    'Status':{type:'status',status:{name:'In progress'}}
+  }};
+}
+async function setupObserved(env,rows) {
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('observedPomoProp').value='Observed Pomodoros (partial)';
+  for(const [name,p] of Object.entries(env.schema))
+    p.id=p.id||'test-stable-'+Object.keys(env.schema).indexOf(name);
+  for(const [name,p] of Object.entries(rows[0].properties))
+    p.id=env.schema[name].id;
+  env.els('token').value='ntn_TEST_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('pinProps').events.click();
+  assert.match(env.els('notice').textContent,/Pinned 6 stable/);
+  await env.els('previewBtn').events.click();
+  assert.equal(env.els('results').children.length,1);
+  env.els('targetSpProject').value='projectX';
+  env.els('authorizeImport').checked=true;
+  env.els('results').children[0].children[0].children[0].checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1);
+  return env.existingTasks.at(-1).id;
+}
+async function addObservedSession(env,spId,suffix,overrides={}) {
+  const record={schemaVersion:1,sessionId:suffix,taskId:spId,
+    source:'live-sp-action-hook',mode:'Pomodoro',observedCompletion:true,
+    automatic:true,manual:false,verifiedCompletedPomodoro:true,
+    startedAt:100000,endedAt:1600000,...overrides};
+  await env.api.persistDataSynced(JSON.stringify(record),
+    'alf-focus-observed-v1-'+suffix);
+}
+test('observed Pomodoro writeback is a reviewed opt-in and only writes pinned existing Number field',async()=>{
+  const rows=[observedTestPage()],env=mount(rows);
+  const spId=await setupObserved(env,rows);
+  await addObservedSession(env,spId,'p1');
+  await addObservedSession(env,spId,'p1'); // same session ID replay: one count
+  await addObservedSession(env,spId,'p2');
+  await addObservedSession(env,spId,'manual',{automatic:false,manual:true,
+    verifiedCompletedPomodoro:false});
+  await addObservedSession(env,spId,'flow',{mode:'Flowtime',
+    verifiedCompletedPomodoro:false});
+  await env.els('previewObservedPomoBtn').events.click();
+  assert.match(env.els('observedPomoPlan').textContent,/0 → 2 unique observed automatic Pomodoros/);
+  assert.match(env.els('observedPomoPlan').textContent,/PARTIAL OBSERVER MINIMUM/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  await env.els('pushObservedPomoBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.match(env.els('notice').textContent,/Explicitly authorize/);
+  env.els('authorizeObservedPomo').checked=true;
+  await env.els('pushObservedPomoBtn').events.click();
+  const writes=env.requests.filter(x=>x.opts.method==='PATCH');
+  assert.equal(writes.length,1);
+  assert.deepEqual(Object.keys(writes[0].opts.body.properties),
+    [env.schema['Observed Pomodoros (partial)'].id]);
+  assert.equal(writes[0].opts.body.properties[env.schema['Observed Pomodoros (partial)'].id].number,2);
+  assert.equal(rows[0].properties['Observed Pomodoros (partial)'].number,2);
+  assert.equal(env.els('authorizeObservedPomo').checked,false);
+  await env.els('pushObservedPomoBtn').events.click(); // cannot replay
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,1);
+  // Re-preview does not reduce a higher existing observed minimum.
+  await env.els('previewObservedPomoBtn').events.click();
+  assert.match(env.els('observedPomoPlan').textContent,/0 reviewed, monotonic updates/);
+});
+
+test('observer ledger changes after staging refuse stale Pomodoro writeback',async()=>{
+  const rows=[observedTestPage()],env=mount(rows);
+  const spId=await setupObserved(env,rows);
+  await addObservedSession(env,spId,'p1');
+  await env.els('previewObservedPomoBtn').events.click();
+  await addObservedSession(env,spId,'p2');
+  env.els('authorizeObservedPomo').checked=true;
+  await env.els('pushObservedPomoBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.match(env.els('observedPomoReport').textContent,/Observer ledger changed/);
+});
+
+test('Notion manual higher count after staging is never overwritten by incomplete observer',async()=>{
+  const rows=[observedTestPage()],env=mount(rows);
+  const spId=await setupObserved(env,rows);
+  await addObservedSession(env,spId,'p1');
+  await env.els('previewObservedPomoBtn').events.click();
+  rows[0].properties['Observed Pomodoros (partial)'].number=8;
+  env.els('authorizeObservedPomo').checked=true;
+  await env.els('pushObservedPomoBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(rows[0].properties['Observed Pomodoros (partial)'].number,8);
+  assert.match(env.els('observedPomoReport').textContent,/Notion count changed/);
+});
+
+test('unknown Pomodoro observations cannot be treated as zero and never write',async()=>{
+  const rows=[observedTestPage()],env=mount(rows);
+  await setupObserved(env,rows);
+  await env.els('previewObservedPomoBtn').events.click();
+  assert.match(env.els('observedPomoPlan').textContent,/No verified observer records/);
+  env.els('authorizeObservedPomo').checked=true;
+  await env.els('pushObservedPomoBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('truncated observer key inventory refuses writeback staging',async()=>{
+  const rows=[observedTestPage()],env=mount(rows);
+  await setupObserved(env,rows);
+  env.api.listSyncedDataKeys=async()=>Array(2001).fill('alf-focus-observed-v1-foo');
+  await env.els('previewObservedPomoBtn').events.click();
+  assert.match(env.els('notice').textContent,/More than 2000 observer keys/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('deleting pinned observer Number property prevents any write',async()=>{
+  const rows=[observedTestPage()],env=mount(rows);
+  const spId=await setupObserved(env,rows);
+  await addObservedSession(env,spId,'p1');
+  await env.els('previewObservedPomoBtn').events.click();
+  env.schema['Observed Pomodoros (partial)']={type:'number',id:'new-replacement-id'};
+  env.els('authorizeObservedPomo').checked=true;
+  await env.els('pushObservedPomoBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.match(env.els('notice').textContent,/Notion source or pinned property changed/);
 });
