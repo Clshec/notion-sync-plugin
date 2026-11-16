@@ -1,10 +1,10 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
-  "description": "Notion-first task/time integration with observed-only focus session ledger (experimental alpha)",
+  "description": "Notion-first tasks, observed focus sessions and opt-in mapping to existing SP Habit Tracker counters (experimental alpha)",
   "author": "Alf contributors; original Notion Sync Plugin by Alessio Lovato",
   "icon": "notion.svg",
   "iFrame": true,
@@ -23,7 +23,8 @@
     "getArchivedTasks",
     "addTask",
     "updateTask",
-    "listSyncedDataKeys"
+    "listSyncedDataKeys",
+    "getAppState"
   ],
   "allowedHosts": [
     "api.notion.com"
