@@ -1190,7 +1190,10 @@ test('habit-day writeback skips duplicate occurrence created after preview',asyn
   await env.els('previewHabitDay').events.click();
   assert.match(env.els('habitDayPlan').textContent,/1 eligible existing occurrence updates/);
   // A second device creates the same habit/day occurrence between review and PATCH.
-  rows.push(habitOccurrence('habit-original-1','late-duplicate',0));
+  const late=habitOccurrence('habit-original-1','late-duplicate',0);
+  for(const [name,prop] of Object.entries(late.properties))
+    if(env.schema[name]) prop.id=env.schema[name].id;
+  rows.push(late);
   env.els('authorizeHabitDay').checked=true;
   await env.els('pushHabitDay').events.click();
   assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
@@ -1216,7 +1219,10 @@ test('different habit added after preview does not block unrelated reviewed dail
   const rows=[habitOccurrence()],env=mount(rows);
   await setupHabitDay(env);
   await env.els('previewHabitDay').events.click();
-  rows.push(habitOccurrence('another-habit','another-occurrence',9));
+  const unrelated=habitOccurrence('another-habit','another-occurrence',9);
+  for(const [name,prop] of Object.entries(unrelated.properties))
+    if(env.schema[name]) prop.id=env.schema[name].id;
+  rows.push(unrelated);
   env.els('authorizeHabitDay').checked=true;
   await env.els('pushHabitDay').events.click();
   const writes=env.requests.filter(r=>r.opts.method==='PATCH');
