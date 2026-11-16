@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.4 experimental Notion preview, manually confirmed SP task import, and manually confirmed SP actual-time writeback to Notion. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.5 experimental Notion preview, manual task import, manually confirmed actual-time writeback, and a conservative live focus-session observer. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -45,6 +45,15 @@ Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSync
 - No Pomodoro completions are fabricated from task durations; session API support is a separate implementation prerequisite.
 - Notion owns planned schedule, deadlines, estimates and habit definitions; SP owns observed time and actual sessions.
 - Tasks with item types outside the explicit allowlist (knowledge, finance, learning, etc.) must be ignored.
+
+### New v0.5: observed Pomodoro / Flowtime / Countdown (no Notion writes)
+
+- The host `plugin.js` registers `ACTION` and `CURRENT_TASK_CHANGE` hooks to observe sessions that start and finish **while Alf is active**. There is no background timer or network request.
+- Mode must be explicitly known from SP's locally persisted mode or a `[FocusMode] Set Mode` event; task identity must be known from the start action or tracking context.
+- Only an explicitly automatic completion of an observed `Pomodoro` is counted as a **verified automatically completed Pomodoro**. Manually ended sessions do not increase that number. Flowtime and Countdown are tracked separately.
+- Each observation is stored under a distinct per-session synced metadata key. The UI has **Read locally observed focus sessions** to show counts by SP task ID. This does **not** change any Notion property.
+- **Limitations:** no historical backfill, no guarantee every SP session is observed, app restarts can interrupt the observer, task/mode ambiguity causes deliberate gaps, `completedDuration` is usually unavailable in the action itself, and these counts must not be pushed as authoritative Notion analytics until validated by a proper structured official SP session API.
+- See [session observer architecture and upstream API proposal](docs/architecture/observed-focus-sessions.md).
 
 ## Architecture and design contracts
 
