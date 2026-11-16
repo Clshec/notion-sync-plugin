@@ -421,3 +421,19 @@ test('missing next cursor with has_more true fails closed before automatic habit
   assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
   assert.equal(f.metadata.length,0);
 });
+
+
+test('ClickCounter must not write counts into a Notion work-time Number field',async()=>{
+  const f=fixture();
+  f.c.actualProp='Work Time';
+  f.c.unit='hours';
+  f.c.taskPropertyBindings={actualProp:{
+    sourceId:BOARD,input:'Work Time',id:'habit-count-id'
+  }};
+  f.store.set('alf-mapping-v2',JSON.stringify(f.c));
+  const result=await f.engine.runOnce();
+  assert.equal(result.written,0);
+  assert.equal(result.errors,1);
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(f.page.properties['Habit Count'].number,0);
+});
