@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.2 experimental read-only preview. Not yet a working synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.3 experimental read-only Notion preview with explicitly authorized manual SP task import. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -12,22 +12,32 @@ There must be **no requirement to create new Notion databases**. Existing proper
 
 The inherited upstream alpha used fixed English property names and unsafe writes. This fork has **removed the old write engine** and replaced it with an opt-in read-only preview, but has not validated a production integration. It also does **not** provide accurate per-task completed Pomodoro session history via the official Plugin API.
 
-**No automatic sync exists in the current fork. Only test with a disposable Notion integration and local SP data until the end-to-end verification phase finishes.**
+**No automatic sync or Notion write capability exists in the current fork. Manual SP task import is separately gated; only test with a disposable Notion integration and local SP data until the end-to-end verification phase finishes.**
 
 An inherited test document contained an integration credential that has been removed from the current default-branch file. It remains potentially exposed in Git history. **Revoke/rotate the affected Notion integration credential immediately.** See [SECURITY.md](SECURITY.md). Never commit secrets.
 
-## Current v0.2 read-only preview (PR #2)
+## Current v0.3 workflow (PRs #2–#3)
 
-The fork now contains a **functional, opt-in read path**, not a sync engine:
+The fork now contains a **functional, opt-in read path plus manual SP task creation**, not an automatic sync engine:
 
 1. Install into an isolated test instance of Super Productivity **20.0.0+** (Desktop or Android). The installed plugin must be packaged with the root `manifest.json`, `plugin.js`, `index.html`, icon, and license; no ZIP release is published yet.
 2. Open **Alf Notion**, enter an internal Notion integration token (per-device, local secret storage). Do not reuse an exposed integration token.
 3. Paste the **data source ID** of your existing Notion Tasks source. A database ID is not interchangeable. The Notion integration must be shared with that source.
 4. Map existing Title and item-type property labels, and give the exact allowed task and bundle values. Other fields are optional and checked against existing types.
 5. Choose **Inspect existing data source schema** (Notion GET), then **Preview matching tasks**. The preview queries Notion pages using the **2026-03-11** API and reads SP active tasks for counts. It shows up to 75 matched rows and scans up to 300 pages per click.
-6. **No Notion or SP writes are possible through this preview.** No automatic timer, hook-based sync, item creation or deletion, and no interaction with SuperSync.
+6. **The preview itself never writes.** For an optional **manual import**, select individual task rows, choose an existing SP Project, tick the explicit authorization checkbox, then press the separate SP import action. Only then can SP tasks be created, with parent bundles first and unresolved subtasks skipped rather than flattened. No Notion API writes are used. The importer embeds a Notion ID in task notes, stores per-page links via keyed sync state and checks active/archived SP tasks to avoid retries duplicating tasks. Do not start simultaneous imports from multiple devices.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### Manual import safeguards and known gaps
+
+- Choose **one existing SP project** as the batch destination. Mapping a Notion project relation to multiple SP Projects is not yet implemented.
+- Select individual rows from the preview and tick the **authorization checkbox**. No task is written on view load, save, query or preview.
+- `حزمة` or any other item with dependent subtasks is imported as a **parent task** (not a folder); subtask `الحزمة الأب` relation becomes `parentId`. Missing parents block the dependent item.
+- Title, planned estimate, execution date/time, separate deadline, completion status and priority can be mapped from user-selected existing properties. `timeSpent` is **not** imported from Notion because actual work originates from SP.
+- Each Notion task has a keyed mapping and a Notion page ID marker in SP task notes to help recover safely after crashes and avoid duplicate imports.
+- Simultaneous manual import on multiple devices is not transactionally safe yet. Do not install this experimental build into a valuable SP profile.
+- A true bidirectional conflict resolver, automatic project association, time export to Notion, and exact Pomodoro counts remain future PRs.
 
 ### Architectural constraints
 - Existing Notion sources are reused, no new Notion database or properties are created.
@@ -70,7 +80,7 @@ The plugin will use SP's native SuperSync data mechanism without replacing or in
 - Base branch: `main`; feature work: dedicated branches and GitHub Pull Requests.
 - Do not merge code without safe mapping, credential isolation and integration tests.
 - Github Issues are currently disabled on the fork; enable in repository Settings → General → Features → Issues to turn [the backlog](docs/roadmap/ISSUES.md) into live Issues.
-- The inherited unsafe engine is removed in v0.2; `plugin.js` is only a header entrypoint while the iframe `index.html` performs read-only Notion schema inspection and filtered task preview.
+- The inherited unsafe engine is removed in v0.2; `plugin.js` is only a header entrypoint while the iframe `index.html` performs read-only Notion schema inspection, filtered task preview, and explicitly authorized one-way SP import.
 
 ## License and provenance
 
