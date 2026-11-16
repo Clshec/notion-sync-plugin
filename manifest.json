@@ -1,10 +1,10 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
-  "description": "Notion-first task import and explicitly authorized tracked-time writeback (experimental alpha)",
+  "description": "Notion-first task/time integration with observed-only focus session ledger (experimental alpha)",
   "author": "Alf contributors; original Notion Sync Plugin by Alessio Lovato",
   "icon": "notion.svg",
   "iFrame": true,
@@ -22,7 +22,8 @@
     "showIndexHtmlAsView",
     "getArchivedTasks",
     "addTask",
-    "updateTask"
+    "updateTask",
+    "listSyncedDataKeys"
   ],
   "allowedHosts": [
     "api.notion.com"
@@ -40,5 +41,8 @@
       ]
     }
   ],
-  "hooks": []
+  "hooks": [
+    "action",
+    "currentTaskChange"
+  ]
 }
