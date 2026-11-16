@@ -128,6 +128,19 @@ code {font:inherit;white-space:nowrap}
   <p id="importReport" role="status" aria-live="polite" class="muted"></p>
 </section>
 <section>
+  <h2>4b. Notion planning → already-linked SP tasks (manual, opt-in)</h2>
+  <p>Notion remains the planner. After changing task titles, planned work time or execution date in your existing Notion board, refresh the preview above and select the tasks to update. This changes <strong>only</strong> the selected SP task's title, estimated work time and execution date. It never overwrites tracked time, completed status, notes, projects, subtasks or habit records. Empty Notion dates/estimates are not treated as deletion requests.</p>
+  <p class="muted">Only currently active, individually linked, non-recurring, unfinished SP tasks are eligible. If either side has changed since review, the task is skipped. Nothing updates automatically on either device; SuperSync remains responsible for SP cross-device synchronization.</p>
+  <div class="actions"><button id="stagePlanBtn">Review Notion planning differences (NO WRITES)</button></div>
+  <pre id="planRefreshDiff" style="white-space:pre-wrap;overflow:auto;max-height:260px"></pre>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizePlanRefresh" type="checkbox" style="width:auto">
+    <span>I reviewed these exact differences and authorize updating only the shown SP planning fields.</span>
+  </label>
+  <div class="actions"><button id="commitPlanBtn">Update reviewed SP plans (NO NOTION WRITES)</button></div>
+  <p id="planRefreshReport" role="status" aria-live="polite" class="muted"></p>
+</section>
+<section>
   <h2>5. Optional actual work time → existing Notion tasks</h2>
   <p>This writeback changes <strong>only the mapped Actual Time Number property</strong> on each selected and linked Notion task. The original plan, deadline, status, task title, and relations remain unchanged. Parent task aggregates are skipped to prevent duplicate counting. No Pomodoro completion count is inferred from tracked time.</p>
   <div class="actions">
@@ -215,6 +228,7 @@ code {font:inherit;white-space:nowrap}
   var lastVisibleRows = [];
   var lastPreviewConfig = null;
   var stagedTimeChanges = null;
+  var stagedPlanRefresh = null;
   var habitPreview = null;
   var stagedHabitDay = null;
   var stagedObservedPomo = null;
@@ -243,7 +257,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -363,7 +377,7 @@ code {font:inherit;white-space:nowrap}
         taskPropertyBindings:next
       })),CFG_KEY);
       taskPropertyBindings=next;
-      lastPreviewConfig=null;stagedTimeChanges=null;stagedHabitDay=null;stagedObservedPomo=null;
+      lastPreviewConfig=null;stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;stagedObservedPomo=null;
       ui('authorizeTime').checked=false;
       message('Pinned '+count+' stable task property IDs in synced plugin metadata only. Rename-safe for these fields. Re-run task preview; Notion was not changed.');
     }catch(e){fail(e);}
@@ -441,6 +455,9 @@ code {font:inherit;white-space:nowrap}
     lastPreviewConfig = null;
     lastVisibleRows = [];
     stagedTimeChanges = null;
+    stagedPlanRefresh = null;
+    ui('authorizePlanRefresh').checked = false;
+    ui('planRefreshDiff').textContent = '';
     stagedObservedPomo = null;
     ui('authorizeObservedPomo').checked = false;
     ui('observedPomoPlan').textContent = '';
@@ -1395,6 +1412,8 @@ code {font:inherit;white-space:nowrap}
     ui('pinProps').addEventListener('click',pinTaskPropertyIds);
     ui('previewBtn').addEventListener('click',preview);
     ui('importBtn').addEventListener('click',importChecked);
+    ui('stagePlanBtn').addEventListener('click',stagePlanRefresh);
+    ui('commitPlanBtn').addEventListener('click',commitPlanRefresh);
     ui('planTimeBtn').addEventListener('click',stageActualTime);
     ui('pushTimeBtn').addEventListener('click',commitActualTime);
     ui('loadSessions').addEventListener('click',showFocusSessions);
