@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.20 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.21 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,12 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.21: strict original Notion↔SP task identities and updated acceptance plan
+
+**Identity security fix:** It is not sufficient to find `alf-notion-page-id:<page-id>` as a substring inside arbitrary editable Super Productivity task notes: `alf-notion-page-id:<page-id>-other` could otherwise be mistaken for the original linked task. All manual import deduplication, reviewed SP planning updates, actual tracked-time export, observed partial-Pomodoro writeback and the focus comparison report now demand the **exact whitespace-delimited page-marker token**. Any task being updated also requires an independent, existing synced `alf-page-link-` record with the matching original Notion page ID and SP task ID; editable notes alone can no longer authorize writing task plans or Notion properties. If a link is missing but the marker is exact, the separately authorized manual import path can recover it without creating a duplicate SP task. Changed/missing/ambiguous markers or multiple claimed SP tasks are always skipped/blocked.
+
+The previously outdated `TEST_PLAN.md` has been replaced with the actual v0.21 acceptance gates: Super Productivity v20, Notion API 2026-03-11 **data sources**, a disposable integration and existing test databases only, opt-in one-device automation, separate host/plugin startup checks, clone/relink/rename/duplicate/Notion-unknown-PATCH cases, and explicit criteria for Android/Windows acceptance. The installed Windows Super Productivity v20.0.0 was launched and verified in a separate temporary `--user-data-dir` sandbox, then its process and sandbox directory were removed. **This validates isolated host startup only, not plugin installation or live Notion/Android behavior.** No real Notion data or the user's main SP profile were modified by that smoke test.
 
 ### New v0.20: one Notion API request lane across all automatic engines
 
