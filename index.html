@@ -711,6 +711,189 @@ code {font:inherit;white-space:nowrap}
   }
 
 
+  function samePlanValue(a,b) {
+    return a===b || (a==null && b==null);
+  }
+  function plannedSpFields(page,c) {
+    // Only fields documented by Super Productivity's public Task API.
+    // No clearing unset Notion estimates or dates without an explicit policy.
+    var title=textValue(taskProperty(page,c,'titleProp'));
+    if(!title.trim())throw new Error('Empty Notion title cannot replace an SP task title');
+    var result={title:title};
+    if(c.estimateProp) {
+      var source=taskProperty(page,c,'estimateProp');
+      if(source && source.number!==null && source.number!==undefined) {
+        var estimate=estimateValue(page,c);
+        var rounded=Math.round(estimate);
+        if(!Number.isSafeInteger(rounded)||rounded<0)
+          throw new Error('Notion planned duration is not a safe millisecond estimate');
+        result.timeEstimate=rounded;
+      }
+    }
+    if(c.executionProp) {
+      var date=taskProperty(page,c,'executionProp');
+      if(date&&date.date&&date.date.start) {
+        var due=plannedDate(page,c,'executionProp','due');
+        if(due.dueDay) {
+          result.dueDay=due.dueDay;result.dueWithTime=null;
+        }else if(due.dueWithTime!==undefined) {
+          result.dueDay=null;result.dueWithTime=due.dueWithTime;
+        }
+      }
+    }
+    return result;
+  }
+  function exactlyLinkedTaskMarker(task,pageId) {
+    return !!task && typeof task.notes==='string' &&
+      task.notes.split(/\\s+/).includes(notionPageMarker(pageId));
+  }
+  function safePlanTask(task,pageId) {
+    if(!task || !exactlyLinkedTaskMarker(task,pageId))return false;
+    if(task.isDone===true || task.repeatCfgId)return false;
+    return true;
+  }
+  async function stagePlanRefresh() {
+    if(active)return;
+    busy(true);
+    stagedPlanRefresh=null;
+    ui('authorizePlanRefresh').checked=false;
+    ui('planRefreshDiff').textContent='';
+    try {
+      var c=getForm();
+      if(!lastPreviewConfig || JSON.stringify(c)!==lastPreviewConfig)
+        throw new Error('Preview the same Notion mapping before planning refresh');
+      var selected=getSelectedPages();
+      if(!selected.length)throw new Error('Select at least one existing Notion task');
+      var sourceId=dataSourceId(c.taskSource,false);
+      var source=await notion('/data_sources/'+encodeURIComponent(sourceId));
+      var errors=propTypes(source.properties||{},c);
+      if(errors.length)throw new Error('Fix Notion mapping before planning refresh: '+errors.join('; '));
+      var activeTasks=await PluginAPI.getTasks()||[];
+      var allTasks=[].concat(activeTasks,await PluginAPI.getArchivedTasks()||[]);
+      var updates=[],skips=[];
+      for(var page of selected) {
+        try {
+          var task=await findLinkedSpTask(page.id,allTasks);
+          if(!task){skips.push('No linked SP task: '+page.id);continue;}
+          if(!activeTasks.some(function(t){return t.id===task.id;})) {
+            skips.push('Archived task: '+page.id);continue;
+          }
+          if(!safePlanTask(task,page.id)) {
+            skips.push('Completed, repeating or ambiguous SP task marker: '+page.id);continue;
+          }
+          var planned=plannedSpFields(page,c);
+          var before={},after={};
+          for(var key of Object.keys(planned)) {
+            if(!samePlanValue(task[key],planned[key])) {
+              before[key]=task[key];after[key]=planned[key];
+            }
+          }
+          if(!Object.keys(after).length)continue;
+          updates.push({notionId:page.id,spId:task.id,
+            identity:{projectId:task.projectId??null,parentId:task.parentId??null},
+            planned:planned,before:before,after:after});
+        }catch(e) {
+          skips.push(page.id+': '+String(e&&e.message||e).slice(0,120));
+        }
+      }
+      stagedPlanRefresh={sourceId:sourceId,mapping:JSON.stringify(c),
+        selection:selected.map(function(page){return page.id;}).sort().join(','),
+        updates:updates};
+      ui('planRefreshDiff').textContent=
+        updates.length+' linked SP task planning updates (NOT applied).\\n'+
+        updates.map(function(entry){
+          return entry.notionId+' → '+entry.spId+': '+
+            Object.keys(entry.after).map(function(key){
+              return key+' '+String(entry.before[key])+' → '+String(entry.after[key]);
+            }).join('; ');
+        }).join('\\n')+(skips.length?'\\nSkipped:\\n'+skips.join('\\n'):'')+
+        '\\nOnly title, estimate and execution date can change. No Notion writes.';
+      message('Notion-owned planning changes staged locally; no tasks or Notion data modified.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function commitPlanRefresh() {
+    if(active)return;
+    busy(true);
+    try {
+      if(!ui('authorizePlanRefresh').checked)
+        throw new Error('Explicitly authorize the reviewed SP planning field changes');
+      var c=getForm(),plan=stagedPlanRefresh;
+      if(!plan||!plan.updates.length)
+        throw new Error('Stage non-empty Notion planning differences before update');
+      var sourceId=dataSourceId(c.taskSource,false);
+      if(sourceId!==plan.sourceId ||
+          JSON.stringify(c)!==plan.mapping || lastPreviewConfig!==plan.mapping)
+        throw new Error('Notion mapping changed: preview and stage plans again');
+      var selection=getSelectedPages().map(function(p){return p.id;}).sort().join(',');
+      if(selection!==plan.selection)
+        throw new Error('Selected tasks changed: stage planning differences again');
+      var source=await notion('/data_sources/'+encodeURIComponent(sourceId));
+      var errors=propTypes(source.properties||{},c);
+      if(errors.length)throw new Error('Notion schema changed: '+errors.join('; '));
+      var activeTasks=await PluginAPI.getTasks()||[];
+      var allTasks=[].concat(activeTasks,await PluginAPI.getArchivedTasks()||[]);
+      var result={updated:0,skipped:0,notes:[]};
+      for(var entry of plan.updates) {
+        try {
+          var task=await findLinkedSpTask(entry.notionId,allTasks);
+          if(!task || task.id!==entry.spId ||
+              !activeTasks.some(function(t){return t.id===task.id;}) ||
+              !safePlanTask(task,entry.notionId) ||
+              (task.projectId??null)!==entry.identity.projectId ||
+              (task.parentId??null)!==entry.identity.parentId) {
+            result.skipped++;result.notes.push('Task identity/status changed: '+entry.notionId);continue;
+          }
+          var changed=Object.keys(entry.before).some(function(key){
+            return !samePlanValue(task[key],entry.before[key]);
+          });
+          if(changed) {
+            result.skipped++;result.notes.push('SP field edited after review: '+entry.notionId);continue;
+          }
+          var page=await notion('/pages/'+encodeURIComponent(entry.notionId));
+          if(!page || page.object!=='page'||page.in_trash||
+              normalizedUUID(page.id)!==normalizedUUID(entry.notionId)||
+              normalizedUUID(page.parent&&page.parent.data_source_id)!==sourceId) {
+            result.skipped++;result.notes.push('Notion page moved/missing: '+entry.notionId);continue;
+          }
+          var types=typeValue(taskProperty(page,c,'typeProp'));
+          if(!types.some(function(t){return splitValues(c.typeValues).includes(t);})) {
+            result.skipped++;result.notes.push('Notion task type changed: '+entry.notionId);continue;
+          }
+          var fresh=plannedSpFields(page,c);
+          if(JSON.stringify(fresh)!==JSON.stringify(entry.planned)) {
+            result.skipped++;result.notes.push('Notion plan changed after review: '+entry.notionId);continue;
+          }
+          // Re-read immediately before update: never clobber local tracking
+          // state, completed flags or unrelated fields via a full task object.
+          var latest=(await PluginAPI.getTasks()||[]).find(function(t){return t.id===entry.spId;});
+          if(!latest || !safePlanTask(latest,entry.notionId) ||
+              latest.projectId!==task.projectId ||
+              (latest.parentId??null)!==(task.parentId??null) ||
+              Object.keys(entry.before).some(function(k){
+                return !samePlanValue(latest[k],entry.before[k]);
+              })) {
+            result.skipped++;result.notes.push('SP task changed before update: '+entry.notionId);continue;
+          }
+          await PluginAPI.updateTask(entry.spId,entry.after,{isIgnoreShortSyntax:true});
+          result.updated++;
+        }catch(e){
+          result.skipped++;
+          result.notes.push(entry.notionId+': '+String(e&&e.message||e).slice(0,135));
+        }
+      }
+      ui('planRefreshReport').textContent='Updated '+result.updated+
+        ' SP planning records; skipped/conflicted '+result.skipped+
+        '. No Notion properties, SP work tracking, completion states, or SuperSync settings changed by this action. '+
+        result.notes.slice(0,10).join('; ');
+      ui('authorizePlanRefresh').checked=false;
+      stagedPlanRefresh=null;
+      ui('planRefreshDiff').textContent='Refresh Notion preview and stage again before another SP planning update.';
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
+
   function normalizedUUID(text) {
     return String(text||'').replace(/-/g,'').toLowerCase();
   }
