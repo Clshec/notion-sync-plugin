@@ -1518,3 +1518,31 @@ test('changed Notion occurrence after preview refuses automatic habit consent',a
   assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-auto-allow-v1-')).length,0);
   assert.match(env.els('notice').textContent,/Existing Notion habit count changed after preview/);
 });
+
+
+test('SP task-note prefix is never mistaken for the exact original Notion page marker',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  task.notes='my notes alf-notion-page-id:'+rows[0].id+'-not-the-page';
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/0 linked SP task planning updates/);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.equal(env.updates.length,0);
+});
+test('a task marker without an independent saved ID link cannot authorize SP plan mutation',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  const linkKey='alf-page-link-'+rows[0].id;
+  await env.api.persistDataSynced('',linkKey);
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/0 linked SP task planning updates/);
+  assert.equal(env.updates.length,0);
+  // Explicit manual importer may reconcile that exact marker without
+  // creating a second task, then future reviewed plans work normally.
+  env.els('authorizeImport').checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1,'idempotent relink must not duplicate task');
+  assert.equal(JSON.parse(await env.api.loadSyncedData(linkKey)).spId,task.id);
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/1 linked SP task planning updates/);
+});
