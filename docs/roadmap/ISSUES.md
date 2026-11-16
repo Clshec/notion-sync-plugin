@@ -43,6 +43,7 @@ Notion tracking reference: https://app.notion.com/p/41ab4a624b7d81dbbc28e1c57279
 - Definition collection maps to SimpleCounter/Habit Tracker, daily records update existing `اللوح` records.
 - Frequency and streaks, numerical goals, StopWatch in milliseconds, corrections/skipped days.
 - Test creation of counters or request missing API methods upstream.
+- v0.28 manual preview + explicit approval for existing day-row `Status` now implemented without any new Number/property: does not automatically infer goals from clicks. Synthetic tests only; actual Android and disposable Notion testing pending. Connected Notion relation to older `متتبع العادات` data source is currently inaccessible (object_not_found), but `اللوح` and `قاعدة العادات` remain accessible. Do not assume those old tracker rows are deleted.
 
 ## P1 — Multi-device offline idempotency
 

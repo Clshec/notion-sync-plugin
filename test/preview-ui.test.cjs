@@ -104,11 +104,17 @@ function mount(customRows, habitRows) {
         const [idOrName,field]=entries[0];
         const name=Object.keys(page.properties).find(n=>n===idOrName ||
           (page.properties[n] && page.properties[n].id===idOrName));
-        assert.ok(name==='الوقت الفعلي'||name==='Habit Count'||name==='Actual Time'||
-          name==='Observed Pomodoros (partial)'||name==='Daily Count',
-          'Patch only an approved existing numeric field or its stable ID');
-        assert.ok(typeof field.number==='number');
-        page.properties[name]={...page.properties[name],type:'number',number:field.number};
+        if(name==='Status'&&field.status) {
+          assert.equal(field.status.name,'Done');
+          page.properties[name]={...page.properties[name],type:'status',
+            status:{name:field.status.name}};
+        }else {
+          assert.ok(name==='الوقت الفعلي'||name==='Habit Count'||name==='Actual Time'||
+            name==='Observed Pomodoros (partial)'||name==='Daily Count',
+            'Patch only an approved existing numeric field or its stable ID');
+          assert.ok(typeof field.number==='number');
+          page.properties[name]={...page.properties[name],type:'number',number:field.number};
+        }
         return page;
       }
       if (opts.method==='POST' && url.endsWith(habitId+'/query'))
@@ -543,6 +549,7 @@ function habitOccurrence(habitId='habit-original-1',id='habit-occ-1',value=1) {
     'نوع الصفحة':{type:'multi_select',multi_select:[{name:'عادة'}]},
     'قاعدة العادات':{type:'relation',relation:[{id:habitId}]},
     'يوم التنفيذ':{type:'date',date:{start:'2026-11-16'}},
+    'Status':{type:'status',status:{name:'Not started'}},
     'Habit Count':{type:'number',number:value}
   }};
 }
@@ -570,6 +577,98 @@ async function setupHabitDay(env,habitId='habit-original-1') {
     version:1,notionId:habitId,spCounterId:'a',notionSourceId:env.habitId
   }), 'alf-habit-definition-link-v1-'+habitId);
 }
+
+async function setupHabitStatus(env,habitId='habit-original-1') {
+  await setupHabitDay(env,habitId);
+  // Match the OFFICIAL Notion REST property-schema shape:
+  // {type:'status',status:{options:[...]}}.
+  env.schema.Status.status={options:[
+    {name:'Not started'}, {name:'In progress'}, {name:'Done'}
+  ]};
+  // Status-only mode must work on the REAL board without a habit Number.
+  env.els('habitOccCountProp').value='';
+  env.els('habitDoneStatusValue').value='Done';
+  env.els('habitOpenStatusValues').value='Not started';
+  await env.els('pinHabitProps').events.click();
+  await env.els('pinProps').events.click();
+  assert.match(env.els('notice').textContent,/Pinned/);
+}
+
+test('existing daily habit Status can be explicitly reviewed without any count Number',async()=>{
+  const rows=[habitOccurrence()];
+  delete rows[0].properties['Habit Count'];
+  const env=mount(rows);
+  await setupHabitStatus(env);
+  await env.els('previewHabitStatusBtn').events.click();
+  assert.match(env.els('habitStatusPlan').textContent,/Not started → Done/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  await env.els('pushHabitStatusBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  env.els('authorizeHabitStatus').checked=true;
+  await env.els('pushHabitStatusBtn').events.click();
+  const writes=env.requests.filter(x=>x.opts.method==='PATCH');
+  assert.equal(writes.length,1);
+  assert.deepEqual(Object.keys(writes[0].opts.body.properties),[env.schema.Status.id]);
+  assert.equal(writes[0].opts.body.properties[env.schema.Status.id].status.name,'Done');
+  assert.equal(rows[0].properties.Status.status.name,'Done');
+  assert.equal(rows[0].properties['الوقت الفعلي'],undefined);
+  assert.equal(env.els('authorizeHabitStatus').checked,false);
+});
+
+test('existing habit status mode fails closed on duplicate daily rows',async()=>{
+  const rows=[habitOccurrence(),habitOccurrence('habit-original-1','habit-occ-2')];
+  const env=mount(rows);
+  await setupHabitStatus(env);
+  await env.els('previewHabitStatusBtn').events.click();
+  assert.match(env.els('habitStatusPlan').textContent,/0 proposed EXISTING Status/);
+  env.els('authorizeHabitStatus').checked=true;
+  await env.els('pushHabitStatusBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('manual Notion status edits after review stay authoritative',async()=>{
+  const rows=[habitOccurrence()];
+  const env=mount(rows);
+  await setupHabitStatus(env);
+  await env.els('previewHabitStatusBtn').events.click();
+  rows[0].properties.Status.status.name='In progress';
+  env.els('authorizeHabitStatus').checked=true;
+  await env.els('pushHabitStatusBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.match(env.els('habitStatusReport').textContent,/Notion source\/relation\/Status changed/);
+});
+
+test('counter reduced or Notion logical day changed after status preview blocks PATCH',async()=>{
+  const rows=[habitOccurrence()];
+  const env=mount(rows);
+  await setupHabitStatus(env);
+  await env.els('previewHabitStatusBtn').events.click();
+  env.counters.a.countOnDay['2026-11-16']=0;
+  env.els('authorizeHabitStatus').checked=true;
+  await env.els('pushHabitStatusBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  env.counters.a.countOnDay['2026-11-16']=3;
+  await env.els('previewHabitStatusBtn').events.click();
+  env.setLogicalDay('2026-11-17');
+  env.els('authorizeHabitStatus').checked=true;
+  await env.els('pushHabitStatusBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('wrong Status option or replaced pinned Status field blocks habit completion',async()=>{
+  const rows=[habitOccurrence()];
+  const env=mount(rows);
+  await setupHabitStatus(env);
+  env.els('habitDoneStatusValue').value='Made up status';
+  await env.els('previewHabitStatusBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.match(env.els('notice').textContent,/EXISTING unfinished\/Done Status/);
+  env.els('habitDoneStatusValue').value='Done';
+  env.schema.Status.id='replaced-status-id';
+  await env.els('previewHabitStatusBtn').events.click();
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.match(env.els('notice').textContent,/Pin existing Status/);
+});
 
 test('habit-day preview uses SP logical day and does not write',async()=>{
   const rows=[habitOccurrence()];
