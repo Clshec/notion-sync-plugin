@@ -180,7 +180,11 @@ code {font:inherit;white-space:nowrap}
     <label>Habit title property (Title) <input id="habitTitleProp" placeholder="e.g. Habit / العادة"></label>
     <label>Habit cadence property (optional; Select) <input id="habitCadenceProp" placeholder="e.g. Frequency / التكرار"></label>
   </div>
-  <div class="actions"><button id="previewHabits">Preview definitions and SP counters (NO WRITES)</button></div>
+  <div class="actions">
+    <button id="pinHabitProps">Pin existing habit field IDs (definitions + board occurrences)</button>
+    <button id="previewHabits">Preview definitions and SP counters (NO WRITES)</button>
+  </div>
+  <p class="muted"><small>Pin existing Notion property IDs before renaming habit fields. Pins are saved only in Alf's synced mapping metadata, never in Notion. Habit-day numeric writeback now requires the occurrence count field to be pinned.</small></p>
   <div class="table-wrap">
     <table><thead><tr><th>Notion habit definition</th><th>Cadence</th><th>Existing SP counter to link</th><th>Today's local count</th></tr></thead><tbody id="habitRows"></tbody></table>
   </div>
@@ -233,6 +237,7 @@ code {font:inherit;white-space:nowrap}
   var stagedHabitDay = null;
   var stagedObservedPomo = null;
   var taskPropertyBindings = {};
+  var habitPropertyBindings = {definitions:{},occurrences:{}};
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
@@ -257,19 +262,26 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
     INPUTS.forEach(function (id) { c[id] = String(ui(id).value || '').trim(); });
     if (Object.keys(taskPropertyBindings).length)
       c.taskPropertyBindings = JSON.parse(JSON.stringify(taskPropertyBindings));
+    if (Object.keys(habitPropertyBindings.definitions).length || Object.keys(habitPropertyBindings.occurrences).length)
+      c.habitPropertyBindings = JSON.parse(JSON.stringify(habitPropertyBindings));
     return c;
   }
   function putForm(c) {
     INPUTS.forEach(function (id) { if (typeof c[id] === 'string') ui(id).value = c[id]; });
     taskPropertyBindings = c.taskPropertyBindings && typeof c.taskPropertyBindings==='object' ?
       c.taskPropertyBindings : {};
+    var h=c.habitPropertyBindings;
+    habitPropertyBindings = h && typeof h==='object' ?
+      {definitions:h.definitions && typeof h.definitions==='object'?h.definitions:{},
+       occurrences:h.occurrences && typeof h.occurrences==='object'?h.occurrences:{}} :
+      {definitions:{},occurrences:{}};
   }
   function dataSourceId(value, optional) {
     var v = String(value || '').trim();
@@ -1299,6 +1311,94 @@ code {font:inherit;white-space:nowrap}
     finally{busy(false);}
   }
 
+  var HABIT_DEFINITION_FIELDS = {habitTitleProp:['title'],habitCadenceProp:['select','multi_select']};
+  var HABIT_OCCURRENCE_FIELDS = {
+    habitOccTypeProp:['select','multi_select'],habitOccRelationProp:['relation'],
+    habitOccDayProp:['date'],habitOccCountProp:['number']
+  };
+  function habitFieldGroup(key) {
+    if (Object.prototype.hasOwnProperty.call(HABIT_DEFINITION_FIELDS,key)) return 'definitions';
+    if (Object.prototype.hasOwnProperty.call(HABIT_OCCURRENCE_FIELDS,key)) return 'occurrences';
+    throw new Error('Unknown habit property mapping: '+key);
+  }
+  function habitSourceForKey(c,key) {
+    return dataSourceId(c[habitFieldGroup(key)==='definitions'?'habitSource':'taskSource'],true);
+  }
+  function habitPinnedId(c,key) {
+    var group=habitFieldGroup(key),bindings=c.habitPropertyBindings&&c.habitPropertyBindings[group];
+    var b=bindings&&bindings[key];
+    if (!b || b.input!==c[key] || typeof b.id!=='string' || !b.id) return '';
+    if (b.sourceId!==habitSourceForKey(c,key)) return '';
+    return b.id;
+  }
+  function habitSchemaProperty(schema,c,key) {
+    if(!c[key])return null;
+    var stable=habitPinnedId(c,key);
+    if(stable) {
+      var matches=Object.keys(schema).filter(function(name){
+        return schema[name] && schema[name].id===stable;
+      });
+      return matches.length===1?schema[matches[0]]:null;
+    }
+    if(schema[c[key]])return schema[c[key]];
+    var ids=Object.keys(schema).filter(function(name){
+      return schema[name] && schema[name].id===c[key];
+    });
+    return ids.length===1?schema[ids[0]]:null;
+  }
+  function habitPageProperty(page,c,key) {
+    if(!c[key])return null;
+    var props=page&&page.properties||{},stable=habitPinnedId(c,key);
+    if(stable) {
+      var matches=Object.keys(props).filter(function(name) {
+        return props[name] && props[name].id===stable;
+      });
+      return matches.length===1?props[matches[0]]:null;
+    }
+    if(props[c[key]])return props[c[key]];
+    var ids=Object.keys(props).filter(function(name) {
+      return props[name] && props[name].id===c[key];
+    });
+    return ids.length===1?props[ids[0]]:null;
+  }
+  function habitWriteKey(c,key) {return habitPinnedId(c,key)||c[key];}
+  async function pinHabitPropertyIds() {
+    if(active)return;
+    busy(true);
+    try {
+      var c=getForm(),next={definitions:{},occurrences:{}},count=0;
+      var groups=[
+        {name:'definitions',source:'habitSource',fields:HABIT_DEFINITION_FIELDS},
+        {name:'occurrences',source:'taskSource',fields:HABIT_OCCURRENCE_FIELDS}
+      ];
+      for(var group of groups) {
+        var selected=Object.keys(group.fields).filter(function(key){return !!c[key];});
+        if(!selected.length)continue;
+        var id=dataSourceId(c[group.source],false);
+        var source=await notion('/data_sources/'+encodeURIComponent(id));
+        var schema=source.properties||{};
+        for(var key of selected) {
+          var property=habitSchemaProperty(schema,c,key);
+          if(!property || !group.fields[key].includes(property.type))
+            throw new Error('Missing/incompatible habit property: '+key);
+          if(typeof property.id!=='string' || !property.id)
+            throw new Error('Notion did not provide an ID for habit property: '+key);
+          next[group.name][key]={sourceId:id,input:c[key],id:property.id};
+          count++;
+        }
+      }
+      if(!count)throw new Error('Map at least one existing habit property before pinning');
+      var saved=Object.assign({},c,{habitPropertyBindings:next});
+      await PluginAPI.persistDataSynced(JSON.stringify(saved),CFG_KEY);
+      habitPropertyBindings=next;
+      habitPreview=null;stagedHabitDay=null;
+      ui('authorizeHabitDay').checked=false;
+      ui('habitDayPlan').textContent='';
+      message('Pinned '+count+' existing habit field IDs in plugin mapping only. No Notion record, property or database changed. Re-preview habits.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
   var HABIT_KEY_PREFIX='alf-habit-definition-link-v1-';
   function habitLocalDay() {
     var d=new Date();
@@ -1602,6 +1702,7 @@ code {font:inherit;white-space:nowrap}
     ui('loadSessions').addEventListener('click',showFocusSessions);
     ui('previewObservedPomoBtn').addEventListener('click',stageObservedPomodoros);
     ui('pushObservedPomoBtn').addEventListener('click',commitObservedPomodoros);
+    ui('pinHabitProps').addEventListener('click',pinHabitPropertyIds);
     ui('previewHabits').addEventListener('click',previewHabitDefinitions);
     ui('saveHabitMappings').addEventListener('click',saveHabitMappings);
     ui('previewHabitDay').addEventListener('click',stageHabitDay);
