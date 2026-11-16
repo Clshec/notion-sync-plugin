@@ -613,6 +613,11 @@ code {font:inherit;white-space:nowrap}
   function notionPageMarker(id) {
     return 'alf-notion-page-id:' + id;
   }
+  // The original page marker must be an exact, complete note token.
+  function hasExactNotionMarker(task,pageId) {
+    return !!task && typeof task.notes==='string' &&
+      task.notes.split(/\s+/).includes(notionPageMarker(pageId));
+  }
   function getSelectedPages() {
     var selections=Array.prototype.slice.call(document.querySelectorAll('.rowSelector'));
     var chosen=new Set(selections.filter(function(c){return c.checked;})
@@ -735,7 +740,7 @@ code {font:inherit;white-space:nowrap}
           var marker=notionPageMarker(id);
           var link=await readLink(id);
           var found=allTasks.find(function(t){return t.id===link ||
-            (typeof t.notes==='string' && t.notes.includes(marker));});
+            hasExactNotionMarker(t,id);});
           if (found) {
             if (!link) {
               await writeLink(id,found.id);
@@ -829,8 +834,7 @@ code {font:inherit;white-space:nowrap}
     return result;
   }
   function exactlyLinkedTaskMarker(task,pageId) {
-    return !!task && typeof task.notes==='string' &&
-      task.notes.split(/\s+/).includes(notionPageMarker(pageId));
+    return hasExactNotionMarker(task,pageId);
   }
   function safePlanTask(task,pageId) {
     if(!task || !exactlyLinkedTaskMarker(task,pageId))return false;
@@ -1118,13 +1122,17 @@ code {font:inherit;white-space:nowrap}
     if (link && (link.notionId!==pageId || typeof link.spId!=='string'))
       throw new Error('Corrupted task mapping; time update refused');
     var matched=allTasks.filter(function(task){
-      return task && typeof task.notes==='string' && task.notes.includes(marker);
+      return hasExactNotionMarker(task,pageId);
     });
-    if (matched.length>1) throw new Error('Multiple SP tasks claim the same Notion page');
-    var task=matched[0] || null;
-    if (link && task && task.id!==link.spId) throw new Error('SP task identity conflict');
-    if (link && !task) throw new Error('Stored task link exists but matching SP task marker is missing');
-    // Unlinked Notion pages are not matched by title because titles are not unique IDs.
+    if(matched.length>1)throw new Error('Multiple SP tasks claim the same Notion page');
+    if(!link) {
+      // Only the manual import/relink flow may adopt a note marker as a link.
+      // All reviewed and automatic writebacks need the independent stored ID.
+      return null;
+    }
+    var task=matched[0]||null;
+    if(task && task.id!==link.spId)throw new Error('SP task identity conflict');
+    if(!task)throw new Error('Stored task link exists but exact SP marker is missing');
     return task;
   }
   function plannedNumber(ms,unit) {
@@ -1392,7 +1400,7 @@ code {font:inherit;white-space:nowrap}
         for(var i=0;i<lastVisibleRows.length;i++) {
           var page=lastVisibleRows[i],matching=allSpTasks.filter(function(t){
             return t && typeof t.notes==='string' &&
-              t.notes.includes(notionPageMarker(page.id));
+              hasExactNotionMarker(t,page.id);
           });
           var cell=previewRows[i]&&previewRows[i].children[9];
           if(!cell)continue;
@@ -1405,7 +1413,7 @@ code {font:inherit;white-space:nowrap}
                 linked=link.spId;
             }catch(_){ /* a corrupt or ambiguous link is never trusted */ }
           }
-          if(matching.length!==1 || (linked && matching[0].id!==linked)) {
+          if(matching.length!==1 || !linked || matching[0].id!==linked) {
             cell.textContent='— (unlinked/ambiguous)';
             continue;
           }
