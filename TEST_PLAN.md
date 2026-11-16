@@ -1,354 +1,73 @@
-# 🧪 Notion Sync Plugin - Test Plan
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.21 experimental)
 
-## Overview
-This test plan provides comprehensive testing procedures for the Notion Sync Plugin, ensuring bidirectional synchronization between Super Productivity tasks and Notion databases works reliably.
+**Scope:** Notion is the authoritative planner and long-term habit record. Super Productivity (SP) v20.0.0+ is the local-first task executor, time tracker and focus timer. No requirement to create, migrate, rename or extend the user's existing Notion databases or fields. Use **existing** Notion task and habit data sources. No automatically created Notion pages or properties. The original repository's v14-era legacy test plan and hard-coded database IDs have been retired.
 
-## Test Environment Setup
+## Evidence levels and environments
 
-### Prerequisites
-- Super Productivity version 14.0.0 or higher
-- Notion workspace with appropriate databases
-- Notion integration with API access
-- Test data in both systems
+| Level | Environment | Meaning | Status |
+|---|---|---|---|
+| L1 | Node.js synthetic mocked Notion/SP API | Contract/regression tests; no real user data | CI active |
+| L2 | SP v20.0.0 executable with a **disposable** `--user-data-dir` | Verify safe isolated host startup | **Passed** on connected Windows PC; test profile deleted |
+| L3 | SP v20.0.0 disposable profile + real plugin ZIP | Install/activate, iframe/host bridge, UI and onReady/onUnload behavior | **Not tested** |
+| L4 | Disposable Notion integration and existing disposable data-source rows | Real Notion schema/GET/PATCH/mapping/permissions, test restore | **Not tested** |
+| L5 | Android + Windows, SuperSync Beta, foreground/background/offline | Concurrency, mobile timers and per-device secrets | **Not tested** |
 
-### Test Databases Required
-1. **Tasks Database** (`2746194e-7199-8183-86ba-cacb567b74e0`)
-   - Properties: Name, SP Task ID, Complete, Notes, Priority, Scheduling, Time Estimate, Time Spent, Task Type, Areas, Projects
-2. **Projects Database** (`2746194e-7199-8191-9a6e-d6e91211dd89`)
-   - Properties: Name, Areas, Tasks, Status, Due Date, Priority, Description, Topics
-3. **Topics Database** (`2746194e-7199-8125-9e98-fa50ef225336`)
-   - Properties: Name, Description, Areas
+Passing L1/L2 **does not** imply production readiness or historical completed-Pomodoro accuracy. Never connect a production Notion token or the user's original SP profile until L3–L5 pass. Do not provide or log real Notion tokens.
 
-### API Configuration
-- **API Key**: `<REDACTED_NOTION_TOKEN_ROTATE_IMMEDIATELY>`
-- **API Version**: `2022-06-28`
-- **Databases**: Shared with integration (Edit permissions)
+## Read-only preflight (L3)
 
-## Test Categories
+1. Verify the SP binary/active host version is **20.0.0+**, which supports the public plugin methods used (`onReady`, `onUnload`, `getTasks`, `getArchivedTasks`, `updateTask`, `getAppState`, `getDayContext`, `getSecret`, `setSecret`, `listSyncedDataKeys`, `persistDataSynced` and guarded `request`).
+2. Start a fresh *disposable* Windows profile using the upstream-supported `--user-data-dir` argument. Never select the real default profile, or reuse its local SuperSync credentials. Check it creates a separate data directory. After closing that exact process, remove only the confirmed disposable temporary folder.
+3. Install the reviewed plugin package (root `manifest.json`, `plugin.js`, `index.html`, `notion.svg`, original MIT license) under **Settings → Plugins → Choose Plugin File** in the disposable profile; inspect manifest host permissions and the console for errors. No package is published by this plan.
+4. With all three automatic modes disabled (default), verify no HTTP request to Notion, no task mutation, no synced metadata churn; verify the header/side panel opens.
+5. Verify per-device Notion credential storage: credentials do not appear in synced plugin metadata, diagnostic summaries, logs or remote SuperSync exports. Importing plugin on Android does not automatically bring a Windows token.
 
-### 1. Plugin Installation & Setup
+## Disposable Notion setup (L4)
 
-#### TC001: Plugin Loading
-- [ ] Plugin loads without errors in Super Productivity
-- [ ] Plugin appears in Settings → Plugins
-- [ ] Plugin can be enabled/disabled
-- [ ] Icon displays correctly in side panel
-- [ ] Plugin JavaScript initializes without console errors
+Use an integration explicitly shared only with existing **disposable** test data sources. Discover the data source UUIDs through Notion's current API **2026-03-11**, rather than confusing database IDs with data-source IDs. Reuse a test board's existing Title, Select/Multi-select item type, Date, Number planned/actual, optional partial observed-Pomodoro Number, and Relation properties as configured; reuse an existing test habit-definition source with title and cadence. No new Notion properties, databases or pages should be generated by the plugin. If no suitable test rows exist, arrange test fixtures **outside the plugin** with explicit user control before L4; do not run tests on personal records.
 
-#### TC002: UI Accessibility
-- [ ] Configuration UI opens via side panel button
-- [ ] Configuration UI loads without errors
-- [ ] All form elements are accessible
-- [ ] UI is responsive across different window sizes
-- [ ] Status indicators update correctly
+### Core L4 cases
 
-### 2. Configuration Management
+- Read-only schema and task preview, allowed item-type filter, pagination limits, pinned property IDs and Arabic/English field renames; no Notion PATCH from previews.
+- Manual import into explicitly selected existing SP project; verify original Notion page marker and independently synced Notion↔SP ID link. Retrying and recovering a valid exact marker with a missing stored link must not duplicate SP tasks. A marker *substring/prefix* is never accepted.
+- Review/approve planning changes: title verbatim (including short syntax such as `#tag`), planned hours/minutes, date-only or timezone-explicit execution time. Completed, archived, recurring, moved or ambiguous SP tasks are skipped. Local SP execution/actual time, notes, project and subtask hierarchy must remain intact.
+- Review/approve existing Actual Time Number writeback. A parent with subtasks is never double-counted; verified increasing `timeSpent` only; Notion higher/manual edits and changed source/type/Number value cause conflict, not overwrite.
+- Habit definition preview, explicit Notion↔existing SP SimpleCounter links, pinned occurrence property IDs; current SP logical day only. Duplicate/moved/unlinked daily rows must never receive a PATCH.
+- Automatic habit consent **per definition and counter**: only definitions individually reviewed and explicitly approved get a nonsecret allowlist record; unrelated linked habits do not. A later day only updates an **already-existing** matching row for that same approved definition.
+- All confirmed Notion PATCH operations must target exactly one existing pinned Number property on the original existing page. No page creation/deletion, property creation, database migration, parent relation updates or automatic Notion status edits.
 
-#### TC003: Initial Configuration
-- [ ] Default configuration loads correctly
-- [ ] API key field accepts valid input
-- [ ] Database ID field accepts valid format
-- [ ] All checkboxes toggle correctly
-- [ ] Dropdown selections work properly
-- [ ] Configuration saves successfully
+## Opt-in automatic modes (L4/L5)
 
-#### TC004: Connection Testing
-- [ ] Valid credentials show "Connected" status
-- [ ] Invalid API key shows appropriate error
-- [ ] Invalid database ID shows appropriate error
-- [ ] Network timeout handled gracefully
-- [ ] Connection status updates in real-time
+Every automatic mode is OFF by default and requires separate local per-device authorization. Verify seeding and baseline creation use synced **nonsecret** metadata and never mutate Notion/SP work data:
 
-#### TC005: Configuration Persistence
-- [ ] Settings persist after plugin restart
-- [ ] Settings persist after Super Productivity restart
-- [ ] Reset to defaults works correctly
-- [ ] Import/export functionality works
-- [ ] Configuration validation prevents invalid values
+- Notion → SP planning: previously matched and individually anchored task plan updates only. Offline local planning edits different from the last agreed baseline are skipped; no task creation/deletion; no reprocessing of unchanged tasks.
+- SP → Notion tracked actual time: matching positive baseline must be seeded after reviewed manual export; only monotonic `timeSpent` changes qualify. A different current Notion Number or local reduction prevents automatic PATCH.
+- SP → Notion habit-day Number: current SP logical day, per-definition approval ID, existing row, positive compatible counter, exact mapping fingerprint, no duplicate rows; no unreviewed definitions or new row generation.
 
-### 3. Bidirectional Sync - Core Functionality
+Enable **one device only** for test writes. Observe its local-only diagnostic screen, not SuperSync delivery as a proven acknowledgment. Check startup checks, periodic bounded batches, the shared 450ms request lane and bounded retry of *explicit* 429 rejection only. Disable mid-flight and verify no not-yet-started write occurs. Never blindly retry a lost/unknown PATCH response. Use read-only reconciliation after failure; verify no duplicate PATCH is sent on the next run.
 
-#### TC006: Initial Sync
-- [ ] First sync completes without errors
-- [ ] Existing SP tasks appear in Notion
-- [ ] Existing Notion tasks appear in SP
-- [ ] Task mappings created correctly
-- [ ] No duplicate tasks created
-- [ ] Sync statistics update correctly
+## L5 device test matrix
 
-#### TC007: Task Creation Sync (SP → Notion)
-- [ ] New SP task creates Notion page
-- [ ] Task title syncs correctly
-- [ ] Task notes/description syncs
-- [ ] SP Task ID populated in Notion
-- [ ] Task mapping established
-- [ ] Sync completes within reasonable time
+| Scenario | Windows desktop | Android | Acceptance |
+|---|---|---|---|
+| SP foreground and plugin opened | Test | Test | UI, hooks and local credentials work |
+| App backgrounded / screen locked | Test | **Required** | Document delays and lost timers; do not claim always-on automation |
+| Offline → reconnect | Test | Test | No duplicate page link, stale baseline or number overwrite |
+| SuperSync across two devices | Test | Test | One writer enabled, other disabled; eventual SP task values agree |
+| Two writers accidentally enabled | Negative test in disposable profiles only | Negative test | Detect/document unresolved lock risk; do **not** certify concurrency safety |
+| Day rollover and timezone changes | Test | Test | Only SP logical-day existing habit rows are processed |
+| 429, 503, timeout, PATCH success with lost response | Test/mocked fault injection | Test as possible | 429 bounded; unknown write is not blindly replayed |
+| Plugin disable/reload | Test | Test | Timers end, no new requests, local enable flags remain explicit |
 
-#### TC008: Task Creation Sync (Notion → SP)
-- [ ] New Notion page creates SP task
-- [ ] Page properties map to SP task fields
-- [ ] SP Task ID updated in Notion
-- [ ] Task mapping established
-- [ ] Task appears in correct SP context
+## Focus timer truthfulness
 
-#### TC009: Task Update Sync (SP → Notion)
-- [ ] Title changes sync to Notion
-- [ ] Notes changes sync to Notion
-- [ ] Completion status syncs
-- [ ] Priority changes sync
-- [ ] Time estimates sync
-- [ ] Project assignments sync
+- Verify the plugin observer sees only future starts/completions while it is active, and **never** claims it has the complete historical session ledger.
+- An observed automatic Pomodoro may count once by verified session ID in a **separate existing Number labeled partial/lower-bound**, never in the authoritative `Completed Pomodoros` field.
+- Flowtime and Countdown are not converted to fictitious Pomodoro completions. Timer work time is not itself completed-session evidence. Breaks are excluded.
+- Production-grade historical completed Pomodoro, Flowtime and Countdown counts **remain blocked** until the official SP Plugin API exposes a durable historical session record with task, mode, automatic/manual state and a stable session ID (or equivalent verified data).
 
-#### TC010: Task Update Sync (Notion → SP)
-- [ ] Notion title changes sync to SP
-- [ ] Notion notes changes sync to SP
-- [ ] Notion status changes sync to SP
-- [ ] Notion scheduling changes sync to SP
-- [ ] Notion priority changes sync to SP
-- [ ] Property type conversions work correctly
+## Acceptance / release decision
 
-### 4. Data Mapping & Conversion
+**Do not declare production-ready** until L3–L5 have passed on disposable data, the historical security note in `SECURITY.md` is addressed (including revoking any historically exposed Notion token), and the user has accepted an explicit policy for the unresolved multi-device write lock and future missing habit-day row creation. Do not silently add Notion fields, modify personal pages or alter SuperSync settings. The expected failure mode is *skip + visible conflict*, never a guessed write. CI alone certifies only L1.
 
-#### TC011: Property Mapping
-- [ ] SP priority maps to Notion Priority select
-- [ ] SP time estimates convert to hours correctly
-- [ ] SP time spent converts to hours correctly
-- [ ] SP project assignments map to Notion Areas
-- [ ] SP tags map to Notion Task Type
-- [ ] Scheduling dates handle timezone correctly
-
-#### TC012: Data Type Conversion
-- [ ] Milliseconds ↔ hours conversion accurate
-- [ ] Date/time formats convert correctly
-- [ ] Rich text handling preserves formatting
-- [ ] Boolean values sync correctly
-- [ ] Select/multi-select options match
-- [ ] Empty/null values handled gracefully
-
-#### TC013: Special Characters & Edge Cases
-- [ ] Unicode characters in titles
-- [ ] Special characters in notes
-- [ ] Very long task titles (>2000 chars)
-- [ ] Empty task titles handled
-- [ ] HTML content in notes
-- [ ] Emoji characters preserved
-
-### 5. Conflict Resolution
-
-#### TC014: Last Modified Wins
-- [ ] Newer changes overwrite older ones
-- [ ] Timestamp comparison works correctly
-- [ ] No data loss during conflicts
-- [ ] Conflict resolution logs clearly
-- [ ] User notified of conflict resolution
-
-#### TC015: Super Productivity Wins
-- [ ] SP changes always take precedence
-- [ ] Notion changes ignored during conflicts
-- [ ] Policy applied consistently
-- [ ] User receives appropriate feedback
-
-#### TC016: Notion Wins
-- [ ] Notion changes always take precedence
-- [ ] SP changes ignored during conflicts
-- [ ] Policy applied consistently
-- [ ] User receives appropriate feedback
-
-#### TC017: Prompt User
-- [ ] Conflict dialog appears for conflicts
-- [ ] User can choose SP version
-- [ ] User can choose Notion version
-- [ ] User can skip conflicted task
-- [ ] Dialog provides clear information
-
-### 6. Auto-Sync Functionality
-
-#### TC018: Auto-Sync Configuration
-- [ ] Auto-sync can be enabled/disabled
-- [ ] Sync interval configurable
-- [ ] Settings persist correctly
-- [ ] Timer starts/stops appropriately
-- [ ] Status indicator updates
-
-#### TC019: Auto-Sync Execution
-- [ ] Sync triggers at specified intervals
-- [ ] Manual changes trigger immediate sync
-- [ ] Task completion triggers sync
-- [ ] Multiple rapid changes handled gracefully
-- [ ] Auto-sync can be manually overridden
-
-#### TC020: Auto-Sync Edge Cases
-- [ ] Network interruption handling
-- [ ] API rate limiting respected
-- [ ] Plugin disable stops auto-sync
-- [ ] System sleep/resume handling
-- [ ] Multiple window instances handled
-
-### 7. Error Handling & Recovery
-
-#### TC021: Network Error Handling
-- [ ] Graceful handling of connection loss
-- [ ] Retry logic for temporary failures
-- [ ] Clear error messages displayed
-- [ ] Plugin continues to function after errors
-- [ ] Sync resumes when connection restored
-
-#### TC022: API Error Handling
-- [ ] Rate limiting handled gracefully
-- [ ] Invalid response handling
-- [ ] Authentication errors caught
-- [ ] Permission errors displayed clearly
-- [ ] Malformed data responses handled
-
-#### TC023: Data Validation
-- [ ] Invalid Notion data doesn't crash plugin
-- [ ] Missing properties handled gracefully
-- [ ] Type mismatches handled correctly
-- [ ] Circular references prevented
-- [ ] Data corruption detection
-
-### 8. Performance Testing
-
-#### TC024: Large Dataset Handling
-- [ ] 100+ tasks sync within reasonable time (<5 minutes)
-- [ ] Memory usage remains stable
-- [ ] UI remains responsive during sync
-- [ ] Batch operations work correctly
-- [ ] Progress feedback provided
-
-#### TC025: Concurrent Operations
-- [ ] Multiple sync operations handled safely
-- [ ] UI interactions during sync work
-- [ ] Plugin doesn't block Super Productivity
-- [ ] Memory leaks prevented
-- [ ] Resource cleanup on completion
-
-### 9. User Experience
-
-#### TC026: User Feedback
-- [ ] Clear status messages displayed
-- [ ] Progress indicators work correctly
-- [ ] Success notifications appear
-- [ ] Error messages are actionable
-- [ ] Help text is accurate and helpful
-
-#### TC027: Workflow Integration
-- [ ] Sync doesn't interrupt user workflow
-- [ ] Minimal performance impact on SP
-- [ ] Sync operates transparently
-- [ ] Manual sync available when needed
-- [ ] Plugin integrates well with SP UI
-
-## Test Data Sets
-
-### Sample Tasks for Testing
-1. **Basic Task**: Simple title and notes
-2. **Complex Task**: All properties filled, with project and tags
-3. **Minimal Task**: Only title
-4. **Rich Content Task**: HTML in notes, special characters
-5. **Scheduled Task**: With specific date/time
-6. **Completed Task**: Marked as done with time tracking
-7. **Long Task**: Very long title and notes
-8. **Unicode Task**: International characters, emojis
-
-### Test Scenarios
-1. **Clean Sync**: No existing data in either system
-2. **Partial Data**: Existing data in one system only
-3. **Conflicting Data**: Modified tasks in both systems
-4. **Large Dataset**: 200+ tasks with various properties
-5. **Mixed State**: Some mapped, some unmapped tasks
-
-## Acceptance Criteria
-
-### Must Have
-- [ ] Bidirectional sync works reliably
-- [ ] No data loss during sync operations
-- [ ] Plugin doesn't crash Super Productivity
-- [ ] Auto-sync works as configured
-- [ ] Conflict resolution policies respected
-- [ ] Error messages are clear and actionable
-
-### Should Have
-- [ ] Sync completes within reasonable time
-- [ ] UI is responsive and intuitive
-- [ ] Performance doesn't impact SP significantly
-- [ ] Recovery from errors is automatic
-- [ ] Configuration is straightforward
-
-### Nice to Have
-- [ ] Sync provides detailed progress feedback
-- [ ] Advanced conflict resolution options
-- [ ] Comprehensive sync statistics
-- [ ] Export/import functionality
-- [ ] Debug logging for troubleshooting
-
-## Test Execution
-
-### Pre-Test Checklist
-- [ ] Test environment configured
-- [ ] Sample data prepared
-- [ ] Plugin installed and enabled
-- [ ] Notion integration configured
-- [ ] API credentials validated
-
-### Test Execution Order
-1. Installation & Setup tests
-2. Configuration Management tests
-3. Core Sync Functionality tests
-4. Data Mapping tests
-5. Conflict Resolution tests
-6. Auto-Sync tests
-7. Error Handling tests
-8. Performance tests
-9. User Experience tests
-
-### Post-Test Activities
-- [ ] Document all bugs found
-- [ ] Verify fixes for critical issues
-- [ ] Update documentation if needed
-- [ ] Create user guides
-- [ ] Plan release notes
-
-## Bug Reporting Template
-
-```markdown
-**Bug ID**: TC###-BUG-###
-**Severity**: Critical/High/Medium/Low
-**Test Case**: TC###
-**Environment**: SP version, OS, Browser
-**Steps to Reproduce**:
-1. Step 1
-2. Step 2
-3. Step 3
-
-**Expected Result**: What should happen
-**Actual Result**: What actually happened
-**Screenshots**: If applicable
-**Logs**: Error messages or console output
-**Workaround**: If available
-```
-
-## Test Completion Criteria
-
-The plugin is ready for release when:
-- [ ] All critical and high severity bugs resolved
-- [ ] 95% of test cases pass
-- [ ] Performance meets acceptance criteria
-- [ ] Documentation is complete and accurate
-- [ ] User acceptance testing completed successfully
-- [ ] Security review completed (if applicable)
-
-## Sign-off
-
-| Role | Name | Date | Signature |
-|------|------|------|-----------|
-| QA Lead | | | |
-| Developer | | | |
-| Product Owner | | | |
-| Technical Lead | | | |
-
----
-
-**Version**: 1.0
-**Last Updated**: 2025-01-21
-**Next Review**: Before next major release
+_Last updated: 2026-11-16. Version: v0.21 experimental acceptance plan._
