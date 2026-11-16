@@ -200,3 +200,30 @@ test('automatic time heartbeat writes local-only outcome counters, no synced sec
   assert.equal(disabled.secrets.has('alf-auto-status-local-v1-time'),false);
   assert.equal(disabled.requests.length,0);
 });
+
+
+test('unknown time PATCH result cannot trigger duplicate automatic PATCH on retry',async()=>{
+  const f=fixture();
+  f.task.timeSpent=10800000;
+  const original=f.api.request;
+  let drop=true;
+  f.api.request=async(url,opts)=>{
+    if(opts.method==='PATCH'&&drop){
+      drop=false;
+      await original(url,opts); // server applied Number but reply was lost
+      throw new Error('Simulated network disconnect after Notion committed');
+    }
+    return original(url,opts);
+  };
+  const first=await f.sync.runOnce();
+  assert.equal(first.written,0);
+  assert.equal(first.errors,1);
+  assert.equal(f.props['الوقت الفعلي'].number,3);
+  assert.equal(JSON.parse(f.store.get(ANCHOR_KEY)).expectedNotion,2,
+    'unacknowledged write must never advance the confirmed baseline');
+  const second=await f.sync.runOnce();
+  assert.equal(second.written,0);
+  assert.equal(second.conflicts,1,
+    'changed Notion number stops stale baseline rather than replaying');
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,1);
+});

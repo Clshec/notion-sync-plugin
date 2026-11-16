@@ -271,3 +271,51 @@ test('automatic habits report local-only run summary, no synced diagnostics or t
   assert.equal(d.secrets.has('alf-auto-status-local-v1-habits'),false);
   assert.equal(d.requests.length,0);
 });
+
+
+test('unknown first habit-day PATCH result is reconciled without duplicate PATCH',async()=>{
+  const f=fixture();
+  const original=f.api.request;
+  let drop=true;
+  f.api.request=async(url,opts)=>{
+    if(opts.method==='PATCH'&&drop){
+      drop=false;
+      await original(url,opts); // first existing Number changed on server
+      throw new Error('Simulated dropped response after commit');
+    }
+    return original(url,opts);
+  };
+  const first=await f.engine.runOnce();
+  assert.equal(first.written,0);
+  assert.equal(first.errors,1);
+  assert.equal(f.page.properties['Habit Count'].number,3);
+  assert.equal(f.store.has(PREFIX+PAGE),false,'no unconfirmed anchor was committed');
+  const second=await f.engine.runOnce();
+  assert.equal(second.written,0);
+  assert.equal(second.anchored,1,
+    'same matching positive Notion/SP value is adopted read-only on recovery');
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,1,
+    'never replay a PATCH whose result was unknown');
+  f.counter.countOnDay[DAY]=4;
+  const third=await f.engine.runOnce();
+  assert.equal(third.written,1,'only new positive progress can be exported');
+  assert.equal(f.page.properties['Habit Count'].number,4);
+});
+test('unknown habit PATCH followed by more SP progress requires explicit reconciliation',async()=>{
+  const f=fixture();
+  const original=f.api.request;
+  f.api.request=async(url,opts)=>{
+    if(opts.method==='PATCH'){
+      await original(url,opts);
+      throw new Error('Notion wrote but did not acknowledge');
+    }
+    return original(url,opts);
+  };
+  await f.engine.runOnce();
+  assert.equal(f.page.properties['Habit Count'].number,3);
+  f.counter.countOnDay[DAY]=4;
+  const again=await f.engine.runOnce();
+  assert.equal(again.written,0);
+  assert.equal(again.conflicts,1,'unanchored positive Notion count not equal to SP is conflict');
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,1);
+});

@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.17 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.18 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,14 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.18: restart/unload lifecycle and unknown Notion-write outcome regression tests
+
+The automated test suite now exercises the **actual SP plugin lifecycle** in a simulated host: one `onReady` handler starts the three optional engines, each installs a controlled runtime timer, and `onUnload` clears the timers. When all three per-device enable flags are absent (the default), no Notion network calls, SP mutations, SuperSync writes or status changes occur, even when their timer callbacks run. The diagnostics privacy contract is tested independently.
+
+Additional failure tests intentionally simulate Notion successfully writing an existing Number while the network response is lost. Automatic actual-time export keeps its old confirmed baseline, then detects the changed Notion Number and refuses a duplicate PATCH on retry. For an existing habit-day Number, a matching current SP/Notion positive value may be *adopted without another PATCH* on a later run; if the SP count has since grown, the unanchored positive Notion value conflicts and is not overwritten. Subsequent writes occur only after a safe confirmed matching baseline. These tests do **not** demonstrate atomic GET/PATCH or cross-device locking: both remain unavailable in the public Notion API.
+
+The host's public `v20.0.0` plugin API types and the installed Windows Super Productivity version were inspected, but SP was **not running** on the connected machine, and we did not install the experimental plugin into the user's live profile, create any Notion sandbox pages or perform a real Android run. This release remains experimental until those end-to-end tests and the official complete focus-session ledger are available. All three automatic modes are disabled by default.
 
 ### New v0.17: per-device synchronization health and immediate-disable safety
 
