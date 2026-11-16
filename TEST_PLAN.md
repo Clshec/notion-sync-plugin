@@ -1,6 +1,8 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.28 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.29 experimental)
 
 **Scope:** Notion is the authoritative planner and long-term habit record. Super Productivity (SP) v20.0.0+ is the local-first task executor, time tracker and focus timer. No requirement to create, migrate, rename or extend the user's existing Notion databases or fields. Use **existing** Notion task and habit data sources. No automatically created Notion pages or properties. The original repository's v14-era legacy test plan and hard-coded database IDs have been retired.
+
+**Real SP 20 iframe API blocker and v0.29 remediation:** the installed host lacks `setSecret/getSecret/deleteSecret` in the iframe's filtered API (confirmed via live settings save). Host-side PluginAPI supports them. The v0.29 same-plugin host message bridge exposes only exact Alf secret key operations and bounded Notion data-source/page methods, verifies the owning iframe and never sends a stored Notion token back to HTML. Verify this in the **actual host** before enabling any live integration; prior mocked iframe API tests did not exercise that restriction. Keep auto modes OFF, no real Notion PATCH and no writes to personal SP tasks during first read-only connection.
 
 ## Evidence levels and environments
 

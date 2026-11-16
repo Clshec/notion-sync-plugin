@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="alf-plugin-owner" content="alf-notion-super-productivity">
 <title>Alf Notion Super Productivity</title>
 <style>
 :root {font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:light dark}
@@ -335,6 +336,55 @@ code {font:inherit;white-space:nowrap}
   var lastHabitAutoReview = null;
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
+  var ALF_HOST_CHANNEL = 'alf-notion-host-rpc-v1';
+  var alfHostSeq = 0;
+  var alfHostPending = new Map();
+  if (window.parent && window.parent !== window) {
+    window.addEventListener('message', function (event) {
+      if (event.source !== window.parent || !event.data ||
+          event.data.channel !== ALF_HOST_CHANNEL ||
+          event.data.type !== 'response') return;
+      var pending = alfHostPending.get(event.data.id);
+      if (!pending) return;
+      alfHostPending.delete(event.data.id);
+      clearTimeout(pending.timeout);
+      if (event.data.ok === true) pending.resolve(event.data.value);
+      else pending.reject(new Error(String(event.data.error || 'Host operation failed')));
+    });
+  }
+  function alfHostRpc(op,args) {
+    if (!window.parent || window.parent === window ||
+        typeof window.parent.postMessage !== 'function')
+      return Promise.reject(new Error('Alf host credential bridge unavailable'));
+    return new Promise(function(resolve,reject) {
+      var id = String(++alfHostSeq)+'-'+Math.random().toString(36).slice(2);
+      var timeout=setTimeout(function(){
+        alfHostPending.delete(id);
+        reject(new Error('Alf host did not respond; no operation confirmed'));
+      },30000);
+      alfHostPending.set(id,{resolve:resolve,reject:reject,timeout:timeout});
+      window.parent.postMessage({
+        channel:ALF_HOST_CHANNEL,type:'request',id:id,op:op,args:args||{}
+      },'*');
+    });
+  }
+  // SP 20 filters credential methods out of iframe PluginAPI. The same
+  // plugin's host-side code owns the local secret instead. Never sync tokens.
+  async function alfUiGetSecret(key) {
+    if (typeof PluginAPI.getSecret === 'function')
+      return await PluginAPI.getSecret(key); // mocked/API-compatible hosts
+    return await alfHostRpc('getSecret',{key:key});
+  }
+  async function alfUiSetSecret(key,value) {
+    if (typeof PluginAPI.setSecret === 'function')
+      return await PluginAPI.setSecret(key,value);
+    return await alfHostRpc('setSecret',{key:key,value:value});
+  }
+  async function alfUiDeleteSecret(key) {
+    if (typeof PluginAPI.deleteSecret === 'function')
+      return await PluginAPI.deleteSecret(key);
+    return await alfHostRpc('deleteSecret',{key:key});
+  }
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
     'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','observedPomoProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','pomodoroWorkMinutes','habitTitleProp','habitCadenceProp','habitOccTypeProp','habitOccTypeValue','habitOccRelationProp','habitOccDayProp','habitOccCountProp','habitOccUnit','habitDoneStatusValue','habitOpenStatusValues'];
   var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
@@ -385,21 +435,20 @@ code {font:inherit;white-space:nowrap}
     return v.replace(/-/g,'').toLowerCase();
   }
   async function notion(path, method, body) {
-    if (typeof PluginAPI.request !== 'function') throw new Error('Update Super Productivity: HTTP plugin bridge unavailable');
-    var token = await PluginAPI.getSecret(TOKEN_KEY);
+    // Real SP 20 iframe has HTTP but not getSecret, so all authenticated
+    // Notion requests go through this plugin's host-side API without giving
+    // the iframe a retrievable copy of the saved credential.
+    if (typeof PluginAPI.getSecret !== 'function')
+      return await alfHostRpc('notion',{path:path,method:method||'GET',body:body});
+    if (typeof PluginAPI.request !== 'function') throw new Error('HTTP plugin bridge unavailable');
+    var token = await alfUiGetSecret(TOKEN_KEY);
     if (!token) throw new Error('Save a Notion integration token on this device first');
-    var opts = {
-      method: method || 'GET',
-      headers: {
-        'Authorization':'Bearer ' + token,
-        'Notion-Version': API_VERSION,
-        'Content-Type':'application/json'
-      },
-      timeout: 30000,
-      responseType: 'json'
-    };
-    if (body !== undefined) opts.body = body;
-    return await PluginAPI.request('https://api.notion.com/v1' + path, opts);
+    var opts={method:method||'GET',headers:{
+      'Authorization':'Bearer '+token,'Notion-Version':API_VERSION,
+      'Content-Type':'application/json'
+    },timeout:30000,responseType:'json'};
+    if(body!==undefined)opts.body=body;
+    return await PluginAPI.request('https://api.notion.com/v1'+path,opts);
   }
   async function save() {
     if (active) return;
@@ -411,7 +460,7 @@ code {font:inherit;white-space:nowrap}
       c.habitSource = dataSourceId(c.habitSource, true);
       // No credentials in synchronized data; retained local token is independent.
       if (ui('token').value.trim()) {
-        await PluginAPI.setSecret(TOKEN_KEY, ui('token').value.trim());
+        await alfUiSetSecret(TOKEN_KEY, ui('token').value.trim());
         ui('token').value = '';
       }
       await PluginAPI.persistDataSynced(JSON.stringify(c), CFG_KEY);
@@ -423,7 +472,7 @@ code {font:inherit;white-space:nowrap}
     if (active) return;
     busy(true);
     try {
-      await PluginAPI.deleteSecret(TOKEN_KEY);
+      await alfUiDeleteSecret(TOKEN_KEY);
       ui('token').value = '';
       message('Local Notion token forgotten on this device. Synced mapping configuration was preserved.');
     } catch (e) { fail(e); }
@@ -1127,14 +1176,14 @@ code {font:inherit;white-space:nowrap}
         throw new Error('Explicitly authorize automatic planning on THIS device');
       var c=getForm();
       automaticPlanSpec(c);
-      if(!await PluginAPI.getSecret(TOKEN_KEY))
+      if(!await alfUiGetSecret(TOKEN_KEY))
         throw new Error('This device needs its own local Notion token');
       if(typeof PluginAPI.listSyncedDataKeys!=='function')
         throw new Error('SP keyed synced data inventory is unavailable');
       var keys=await PluginAPI.listSyncedDataKeys(AUTO_PLAN_ANCHOR_PREFIX);
       if(!Array.isArray(keys)||!keys.length)
         throw new Error('Prepare at least one matching linked task baseline first');
-      await PluginAPI.setSecret(AUTO_PLAN_ENABLED_KEY,'enabled');
+      await alfUiSetSecret(AUTO_PLAN_ENABLED_KEY,'enabled');
       ui('autoPlanStatus').textContent='Enabled on THIS device. The plugin checks anchors periodically while SP runs; conflicts are skipped and Notion is never written.';
       ui('authorizeAutoLocal').checked=false;
     }catch(e){fail(e);}
@@ -1144,7 +1193,7 @@ code {font:inherit;white-space:nowrap}
     if(active)return;
     busy(true);
     try {
-      await PluginAPI.deleteSecret(AUTO_PLAN_ENABLED_KEY);
+      await alfUiDeleteSecret(AUTO_PLAN_ENABLED_KEY);
       ui('authorizeAutoLocal').checked=false;
       ui('autoPlanStatus').textContent='Disabled on this device; prepared synced baselines remain available.';
     }catch(e){fail(e);}
@@ -1265,14 +1314,14 @@ code {font:inherit;white-space:nowrap}
       if(!ui('authorizeAutoTimeLocal').checked)
         throw new Error('Explicitly authorize ongoing Notion time writes on THIS device');
       automaticTimeSpec(getForm());
-      if(!await PluginAPI.getSecret(TOKEN_KEY))
+      if(!await alfUiGetSecret(TOKEN_KEY))
         throw new Error('Local Notion token missing on this device');
       if(typeof PluginAPI.listSyncedDataKeys!=='function')
         throw new Error('SP synchronized metadata inventory unavailable');
       var keys=await PluginAPI.listSyncedDataKeys(AUTO_TIME_ANCHOR_PREFIX);
       if(!Array.isArray(keys)||!keys.length)
         throw new Error('Prepare at least one reviewed matching time baseline first');
-      await PluginAPI.setSecret(AUTO_TIME_ENABLED_KEY,'enabled');
+      await alfUiSetSecret(AUTO_TIME_ENABLED_KEY,'enabled');
       ui('autoTimeStatus').textContent='Automatic Notion work-time export ENABLED on this device. Strict monotonic, pinned existing Number fields only.';
       ui('authorizeAutoTimeLocal').checked=false;
     }catch(e){fail(e);}
@@ -1282,7 +1331,7 @@ code {font:inherit;white-space:nowrap}
     if(active)return;
     busy(true);
     try {
-      await PluginAPI.deleteSecret(AUTO_TIME_ENABLED_KEY);
+      await alfUiDeleteSecret(AUTO_TIME_ENABLED_KEY);
       ui('authorizeAutoTimeLocal').checked=false;
       ui('autoTimeStatus').textContent='Automatic Notion work-time export disabled here. Synced task baselines remain for inspection.';
     }catch(e){fail(e);}
@@ -1995,7 +2044,7 @@ code {font:inherit;white-space:nowrap}
       var keys=await PluginAPI.listSyncedDataKeys(HABIT_KEY_PREFIX);
       if(!Array.isArray(keys)||!keys.length)
         throw new Error('Link at least one existing Notion habit definition to an SP counter');
-      if(!await PluginAPI.getSecret(TOKEN_KEY))
+      if(!await alfUiGetSecret(TOKEN_KEY))
         throw new Error('Local Notion credential missing on this device');
       // Revalidate the complete day inventory before recording any approvals.
       var rows=await queryExistingHabitDay(c,scope.day,scope.sourceId,schema.properties||{});
@@ -2033,14 +2082,14 @@ code {font:inherit;white-space:nowrap}
           AUTO_HABIT_APPROVAL_PREFIX+approval.habitId);
       // Replace, never accumulate, approved definitions on THIS device.
       // In case saving scope fails the local enable flag is already OFF.
-      await PluginAPI.deleteSecret(AUTO_HABIT_ENABLED_KEY);
-      await PluginAPI.setSecret(AUTO_HABIT_DEVICE_SCOPE_KEY,JSON.stringify({
+      await alfUiDeleteSecret(AUTO_HABIT_ENABLED_KEY);
+      await alfUiSetSecret(AUTO_HABIT_DEVICE_SCOPE_KEY,JSON.stringify({
         version:1,spec:JSON.stringify(spec),
         grants:approved.map(function(item){
           return {habitId:item.habitId,counterId:item.counterId};
         })
       }));
-      await PluginAPI.setSecret(AUTO_HABIT_ENABLED_KEY,'enabled');
+      await alfUiSetSecret(AUTO_HABIT_ENABLED_KEY,'enabled');
       ui('authorizeAutoHabitsLocal').checked=false;
       ui('autoHabitsStatus').textContent=
         'Automatic counts enabled on THIS device for '+approved.length+
@@ -2052,8 +2101,8 @@ code {font:inherit;white-space:nowrap}
     if(active)return;
     busy(true);
     try {
-      await PluginAPI.deleteSecret(AUTO_HABIT_ENABLED_KEY);
-      await PluginAPI.deleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
+      await alfUiDeleteSecret(AUTO_HABIT_ENABLED_KEY);
+      await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
       ui('authorizeAutoHabitsLocal').checked=false;
       ui('autoHabitsStatus').textContent=
         'Automatic habit-day counts disabled on this device. Existing synced mapping/baselines are retained.';
@@ -2365,8 +2414,8 @@ code {font:inherit;white-space:nowrap}
       ];
       var lines=['LOCAL DEVICE ONLY — No Notion or SP task requests were made by this report.'];
       for(var engine of engines) {
-        var enabled=await PluginAPI.getSecret(engine.flag);
-        var raw=await PluginAPI.getSecret(AUTO_STATUS_PREFIX+engine.flow);
+        var enabled=await alfUiGetSecret(engine.flag);
+        var raw=await alfUiGetSecret(AUTO_STATUS_PREFIX+engine.flow);
         var line=engine.name+': '+(enabled==='enabled'?'ENABLED':'DISABLED');
         if(raw) {
           try {
@@ -2399,10 +2448,10 @@ code {font:inherit;white-space:nowrap}
         if (c && c.version===2) putForm(c);
       }
       if(!ui('pomodoroWorkMinutes').value)ui('pomodoroWorkMinutes').value='25';
-      var local=await PluginAPI.getSecret(TOKEN_KEY);
-      var autoEnabled=await PluginAPI.getSecret(AUTO_PLAN_ENABLED_KEY);
-      var timeEnabled=await PluginAPI.getSecret(AUTO_TIME_ENABLED_KEY);
-      var habitsEnabled=await PluginAPI.getSecret(AUTO_HABIT_ENABLED_KEY);
+      var local=await alfUiGetSecret(TOKEN_KEY);
+      var autoEnabled=await alfUiGetSecret(AUTO_PLAN_ENABLED_KEY);
+      var timeEnabled=await alfUiGetSecret(AUTO_TIME_ENABLED_KEY);
+      var habitsEnabled=await alfUiGetSecret(AUTO_HABIT_ENABLED_KEY);
       ui('autoHabitsStatus').textContent=habitsEnabled==='enabled'?
         'Automatic existing habit-day Number writes ENABLED on this device (experimental).':
         'Automatic existing habit-day writes DISABLED on this device (default).';
