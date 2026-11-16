@@ -1182,3 +1182,51 @@ test('habit-day writeback refuses unpinned property mapping without Notion write
   assert.match(env.els('notice').textContent,/Pin stable occurrence property IDs/);
   assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
 });
+
+
+test('habit-day writeback skips duplicate occurrence created after preview',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  assert.match(env.els('habitDayPlan').textContent,/1 eligible existing occurrence updates/);
+  // A second device creates the same habit/day occurrence between review and PATCH.
+  const late=habitOccurrence('habit-original-1','late-duplicate',0);
+  for(const [name,prop] of Object.entries(late.properties))
+    if(env.schema[name]) prop.id=env.schema[name].id;
+  rows.push(late);
+  env.els('authorizeHabitDay').checked=true;
+  await env.els('pushHabitDay').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.equal(rows[0].properties['Habit Count'].number,1);
+  assert.equal(rows[1].properties['Habit Count'].number,0);
+  assert.match(env.els('habitDayReport').textContent,/occurrence added\/removed\/duplicated since preview/);
+  assert.equal(env.requests.filter(r=>r.opts.method==='POST').length,2,
+    'commit must query current full day inventory, not trust preview cache');
+});
+
+test('habit-day writeback skips an occurrence removed since preview',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  rows.splice(0,1); // the Notion row no longer belongs to the queried day/source
+  env.els('authorizeHabitDay').checked=true;
+  await env.els('pushHabitDay').events.click();
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.match(env.els('habitDayReport').textContent,/occurrence added\/removed\/duplicated since preview/);
+});
+
+test('different habit added after preview does not block unrelated reviewed daily count',async()=>{
+  const rows=[habitOccurrence()],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  const unrelated=habitOccurrence('another-habit','another-occurrence',9);
+  for(const [name,prop] of Object.entries(unrelated.properties))
+    if(env.schema[name]) prop.id=env.schema[name].id;
+  rows.push(unrelated);
+  env.els('authorizeHabitDay').checked=true;
+  await env.els('pushHabitDay').events.click();
+  const writes=env.requests.filter(r=>r.opts.method==='PATCH');
+  assert.equal(writes.length,1);
+  assert.equal(rows[0].properties['Habit Count'].number,3);
+  assert.equal(rows[1].properties['Habit Count'].number,9);
+});

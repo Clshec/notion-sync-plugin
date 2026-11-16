@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.12 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.13 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,12 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.13: revalidate today's whole habit occurrence set before writeback
+
+A second device or another Notion automation may add another `اللوح` habit/day occurrence **after** the user stages an initial read-only diff. Before any authorized Number PATCH, Alf now re-queries **all matching existing Notion habit/day rows** (bounded/paginated, refusing truncated results) and groups them by habit definition ID and Super Productivity logical day. Only a candidate with **exactly one current occurrence, matching the originally reviewed Notion page ID**, may continue to the existing schema, link, counter, page identity and numeric conflict checks. A newly duplicated, removed or replaced daily row is skipped, rather than writing to an arbitrary occurrence. An unrelated new habit for the same day does not block the original habit's update. This does not create or delete any Notion records.
+
+There is no cross-device transaction lock or atomic Notion compare-and-swap: changes occurring between the final query and PATCH are still possible. Production use remains blocked pending a full integration/sync validation.
 
 ### New v0.12: rename-safe existing Notion habit fields, with stricter daily writeback guards
 
