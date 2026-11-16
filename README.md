@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.6 experimental Notion preview, manual SP task import, approved actual-time writeback, observed focus sessions, and user-configured links to existing Habit Tracker counters. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.7 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -62,6 +62,16 @@ Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSync
 - The user picks the **specific existing counter** to link to each Notion habit. The linkage is stored as keyed plugin metadata using Notion habit page ID + SP counter ID. No Notion database, page, habit occurrence or field is created.
 - The preview can display today's **device-local** counter count, but that value is **not** currently pushed to Notion; date handling needs the app's configurable logical-day semantics in a later phase.
 - See [habit definition & counter mapping architecture](docs/architecture/habit-mapping.md). This mapping is only a foundation for actual habit-day reconciliation.
+
+### New v0.7: existing habit-day execution writeback (opt-in only)
+
+- Configure fields **already present in the Notion task/board source**: item type (`عادة`), single relation to the original habit definition, execution day and an optional pre-existing numeric completion/count value property.
+- Alf resolves an existing Notion habit definition → SP SimpleCounter mapping by ID and SP's official `getDayContext().todayStr` logical day; if the API is absent, writeback is disabled.
+- Preview reads matching date/type-filtered **existing Notion habit occurrence rows** and the counter's `countOnDay` value. Missing rows and missing mapping are skipped, never auto-created.
+- Positive `ClickCounter` values are counts; `StopWatch` values are ms and can be converted to explicitly chosen minutes/hours.
+- A separate authorization checkbox enables updating **only the existing Number property** after refetching the same Notion page and rechecking the source/type/day/relation/current value and latest SP counter value.
+- Duplicate habit-day rows, a newer Notion manual correction, missing logical-day support, stale devices and ambiguous relations are skipped instead of overwritten.
+- **No automatic background sync, new Notion database, new habit definition, new daily occurrence, or property creation.** See [habit-day writeback design](docs/architecture/habit-day-writeback.md).
 
 ## Architecture and design contracts
 
