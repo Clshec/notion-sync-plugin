@@ -929,6 +929,125 @@ code {font:inherit;white-space:nowrap}
   }
 
 
+  function automaticPlanSpec(c) {
+    var sourceId=dataSourceId(c.taskSource,false);
+    if(!c.titleProp||!c.typeProp||!splitValues(c.typeValues).length)
+      throw new Error('Configure Notion title, type and allowed task types first');
+    if(c.unit!=='hours'&&c.unit!=='minutes')
+      throw new Error('Choose explicit hours or minutes for estimates');
+    var ids={},input={};
+    for(var key of ['titleProp','typeProp','estimateProp','executionProp']) {
+      input[key]=c[key]||'';
+      ids[key]=c[key]?taskPropertyId(c,key):'';
+      if(c[key]&&!ids[key])
+        throw new Error('Pin stable task property IDs for automatic planning: '+key);
+    }
+    return {sourceId:sourceId,input:input,ids:ids,unit:c.unit,
+      allowed:splitValues(c.typeValues).slice().sort()};
+  }
+  function planBaselineForTask(task) {
+    return {
+      title:task.title,
+      timeEstimate:typeof task.timeEstimate==='number'?task.timeEstimate:null,
+      dueDay:task.dueDay??null,
+      dueWithTime:task.dueWithTime??null
+    };
+  }
+  async function seedAutomaticPlanAnchors() {
+    if(active)return;
+    busy(true);
+    ui('autoSeedReport').textContent='';
+    try {
+      if(!ui('authorizeAutoSeed').checked)
+        throw new Error('Explicitly authorize preparing matching SP task plans');
+      var c=getForm();
+      if(!lastPreviewConfig||lastPreviewConfig!==JSON.stringify(c))
+        throw new Error('Preview Notion tasks with the same mapping before preparing automatic refresh');
+      var spec=automaticPlanSpec(c),selected=getSelectedPages();
+      if(!selected.length)throw new Error('Select one or more Notion tasks to prepare');
+      var schema=await notion('/data_sources/'+encodeURIComponent(spec.sourceId));
+      if(propTypes(schema.properties||{},c).length)
+        throw new Error('Fix Notion source mapping before preparing automatic refresh');
+      var activeTasks=await PluginAPI.getTasks()||[];
+      var allTasks=[].concat(activeTasks,await PluginAPI.getArchivedTasks()||[]);
+      var stats={ready:0,skipped:0,notes:[]};
+      for(var snapshot of selected) {
+        try {
+          var page=await notion('/pages/'+encodeURIComponent(snapshot.id));
+          if(!page||page.object!=='page'||page.in_trash||
+              normalizedUUID(page.id)!==normalizedUUID(snapshot.id)||
+              normalizedUUID(page.parent&&page.parent.data_source_id)!==spec.sourceId)
+            throw new Error('Notion page moved or unavailable');
+          var types=typeValue(taskProperty(page,c,'typeProp'));
+          if(!types.some(function(t){return spec.allowed.includes(t);}))
+            throw new Error('Notion page type no longer selected');
+          var task=await findLinkedSpTask(page.id,allTasks);
+          if(!task||!activeTasks.some(function(x){return x.id===task.id;})||
+              !safePlanTask(task,page.id))
+            throw new Error('Task missing, completed, repeating or ambiguous');
+          var rawLink=await PluginAPI.loadSyncedData(LINK_PREFIX+page.id);
+          var link=rawLink?JSON.parse(rawLink):null;
+          if(!link||link.notionId!==page.id||link.spId!==task.id)
+            throw new Error('Stored Notion↔SP link absent or mismatched');
+          var desired=plannedSpFields(page,c);
+          if(Object.keys(desired).some(function(key){
+              return !samePlanValue(task[key],desired[key]);
+          })) {
+            throw new Error('Notion and SP plans differ; review/apply section 4b first');
+          }
+          var anchor={version:1,notionId:page.id,spId:task.id,
+            sourceId:spec.sourceId,spec:JSON.stringify(spec),
+            projectId:task.projectId??null,parentId:task.parentId??null,
+            expected:planBaselineForTask(task)};
+          await PluginAPI.persistDataSynced(JSON.stringify(anchor),
+            AUTO_PLAN_ANCHOR_PREFIX+page.id);
+          stats.ready++;
+        }catch(e){
+          stats.skipped++;
+          stats.notes.push(snapshot.id+': '+String(e&&e.message||e).slice(0,110));
+        }
+      }
+      ui('autoSeedReport').textContent=
+        stats.ready+' matching linked task baselines prepared; '+stats.skipped+
+        ' skipped. '+stats.notes.slice(0,8).join('; ')+
+        '. No Notion or SP tasks changed. Enable this device separately.';
+      ui('authorizeAutoSeed').checked=false;
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function enableLocalAutomaticPlan() {
+    if(active)return;
+    busy(true);
+    try {
+      if(!ui('authorizeAutoLocal').checked)
+        throw new Error('Explicitly authorize automatic planning on THIS device');
+      var c=getForm();
+      automaticPlanSpec(c);
+      if(!await PluginAPI.getSecret(TOKEN_KEY))
+        throw new Error('This device needs its own local Notion token');
+      if(typeof PluginAPI.listSyncedDataKeys!=='function')
+        throw new Error('SP keyed synced data inventory is unavailable');
+      var keys=await PluginAPI.listSyncedDataKeys(AUTO_PLAN_ANCHOR_PREFIX);
+      if(!Array.isArray(keys)||!keys.length)
+        throw new Error('Prepare at least one matching linked task baseline first');
+      await PluginAPI.setSecret(AUTO_PLAN_ENABLED_KEY,'enabled');
+      ui('autoPlanStatus').textContent='Enabled on THIS device. The plugin checks anchors periodically while SP runs; conflicts are skipped and Notion is never written.';
+      ui('authorizeAutoLocal').checked=false;
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function disableLocalAutomaticPlan() {
+    if(active)return;
+    busy(true);
+    try {
+      await PluginAPI.deleteSecret(AUTO_PLAN_ENABLED_KEY);
+      ui('authorizeAutoLocal').checked=false;
+      ui('autoPlanStatus').textContent='Disabled on this device; prepared synced baselines remain available.';
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
+
   function normalizedUUID(text) {
     return String(text||'').replace(/-/g,'').toLowerCase();
   }
@@ -1741,7 +1860,11 @@ code {font:inherit;white-space:nowrap}
       }
       if(!ui('pomodoroWorkMinutes').value)ui('pomodoroWorkMinutes').value='25';
       var local=await PluginAPI.getSecret(TOKEN_KEY);
-      message(local?'Local Notion credential is present on this device. Preview remains read-only.':
+      var autoEnabled=await PluginAPI.getSecret(AUTO_PLAN_ENABLED_KEY);
+      ui('autoPlanStatus').textContent=autoEnabled==='enabled'?
+        'Auto planning enabled on this device; requires running SP and locally stored Notion token.':
+        'Auto planning disabled on this device (default).';
+      message(local?'Local Notion credential is present on this device. Notion data reads remain explicit or separately authorized auto-planning.':
         'No local Notion credential found. Save a token to inspect your data source.');
     } catch(e) { fail(e); }
     ui('save').addEventListener('click',save);
