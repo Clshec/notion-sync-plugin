@@ -468,6 +468,13 @@ code {font:inherit;white-space:nowrap}
     }catch(e){fail(e);}
     finally{busy(false);}
   }
+  function assertSeparateNotionNumberPurposes(c) {
+    var actual=c.actualProp&&(taskPropertyId(c,'actualProp')||c.actualProp);
+    var observed=c.observedPomoProp&&
+      (taskPropertyId(c,'observedPomoProp')||c.observedPomoProp);
+    if(actual && observed && actual===observed)
+      throw new Error('Actual work time and partial observed Pomodoros must use DIFFERENT existing Notion Number properties');
+  }
   function propTypes(schema, config) {
     var errors = [];
     Object.keys(FIELDS).forEach(function (key) {
@@ -478,6 +485,11 @@ code {font:inherit;white-space:nowrap}
       else if (FIELDS[key].indexOf(prop.type) === -1)
         errors.push(key + ': "' + name + '" has type ' + prop.type + ' (expected ' + FIELDS[key].join('/') + ')');
     });
+    var actual=schemaTaskProperty(schema,config,'actualProp');
+    var observed=schemaTaskProperty(schema,config,'observedPomoProp');
+    if(actual&&observed && ((actual.id&&observed.id&&actual.id===observed.id) ||
+        (config.actualProp&&config.actualProp===config.observedPomoProp)))
+      errors.push('Actual Time and observed Pomodoro count cannot map to the same Notion Number property');
     return errors;
   }
   function textValue(property) {
@@ -1158,6 +1170,7 @@ code {font:inherit;white-space:nowrap}
   }
 
   function automaticTimeSpec(c) {
+    assertSeparateNotionNumberPurposes(c);
     var sourceId=dataSourceId(c.taskSource,false);
     if(!c.actualProp || !c.typeProp || !splitValues(c.typeValues).length)
       throw new Error('Configure an existing Notion Actual Time Number and task type allowlist');
@@ -1261,6 +1274,7 @@ code {font:inherit;white-space:nowrap}
     stagedTimeChanges = null;
     try {
       var c=getForm();
+      assertSeparateNotionNumberPurposes(c);
       if (!lastPreviewConfig || JSON.stringify(c)!==lastPreviewConfig)
         throw new Error('Refresh task preview before staging actual time');
       if (!c.actualProp) throw new Error('Map an existing Notion Actual Time Number property');
@@ -1507,6 +1521,7 @@ code {font:inherit;white-space:nowrap}
     ui('observedPomoPlan').textContent='';
     try {
       var c=getForm();
+      assertSeparateNotionNumberPurposes(c);
       if(!lastPreviewConfig||lastPreviewConfig!==JSON.stringify(c))
         throw new Error('Refresh task preview before reviewing observed Pomodoros');
       if(!c.observedPomoProp)
@@ -1861,6 +1876,15 @@ code {font:inherit;white-space:nowrap}
     return !!date && typeof date.start==='string' && date.start===day && !date.end;
   }
   function validateOccurrenceMapping(schema,c) {
+    // Do not store a ClickCounter total in the same Notion field that means
+    // tracked work hours (or another incompatible duration unit).
+    var countField=habitSchemaProperty(schema,c,'habitOccCountProp');
+    var actualField=schemaTaskProperty(schema,c,'actualProp');
+    if(c.actualProp&&countField&&actualField&&
+       ((countField.id&&actualField.id&&countField.id===actualField.id)||
+        c.habitOccCountProp===c.actualProp) &&
+       (c.habitOccUnit==='count'||c.habitOccUnit!==c.unit))
+      throw new Error('Habit count/duration unit conflicts with the existing Actual Time Number field');
     for(var key of Object.keys(HABIT_OCCURRENCE_FIELDS)) {
       var prop=habitSchemaProperty(schema,c,key);
       if(!prop || !HABIT_OCCURRENCE_FIELDS[key].includes(prop.type))
