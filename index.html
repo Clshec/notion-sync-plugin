@@ -310,6 +310,7 @@ code {font:inherit;white-space:nowrap}
   var AUTO_TIME_ANCHOR_PREFIX = 'alf-time-anchor-v1-';
   var AUTO_HABIT_ENABLED_KEY = 'alf-auto-habit-local-enabled-v1';
   var AUTO_HABIT_APPROVAL_PREFIX = 'alf-habit-auto-allow-v1-';
+  var AUTO_HABIT_DEVICE_SCOPE_KEY = 'alf-auto-habit-local-scope-v1';
   var AUTO_STATUS_PREFIX = 'alf-auto-status-local-v1-';
   var lastHabitAutoReview = null;
   var API_VERSION = '2026-03-11';
@@ -1984,6 +1985,15 @@ code {font:inherit;white-space:nowrap}
       for(var approval of approved)
         await PluginAPI.persistDataSynced(JSON.stringify(approval),
           AUTO_HABIT_APPROVAL_PREFIX+approval.habitId);
+      // Replace, never accumulate, approved definitions on THIS device.
+      // In case saving scope fails the local enable flag is already OFF.
+      await PluginAPI.deleteSecret(AUTO_HABIT_ENABLED_KEY);
+      await PluginAPI.setSecret(AUTO_HABIT_DEVICE_SCOPE_KEY,JSON.stringify({
+        version:1,spec:JSON.stringify(spec),
+        grants:approved.map(function(item){
+          return {habitId:item.habitId,counterId:item.counterId};
+        })
+      }));
       await PluginAPI.setSecret(AUTO_HABIT_ENABLED_KEY,'enabled');
       ui('authorizeAutoHabitsLocal').checked=false;
       ui('autoHabitsStatus').textContent=
@@ -1997,6 +2007,7 @@ code {font:inherit;white-space:nowrap}
     busy(true);
     try {
       await PluginAPI.deleteSecret(AUTO_HABIT_ENABLED_KEY);
+      await PluginAPI.deleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
       ui('authorizeAutoHabitsLocal').checked=false;
       ui('autoHabitsStatus').textContent=
         'Automatic habit-day counts disabled on this device. Existing synced mapping/baselines are retained.';
