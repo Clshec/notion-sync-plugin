@@ -40,8 +40,8 @@ code {font:inherit;white-space:nowrap}
 <main>
 <header><span class="logo">ألف</span><div><h1>Alf Notion Super Productivity</h1><small>Notion plans · Super Productivity executes · Windows + Android</small></div></header>
 <section>
-  <strong class="status safe">READ-ONLY PREVIEW</strong>
-  <p>This alpha only reads existing Notion data sources and local Super Productivity tasks. No database, page, task, or habit is created, updated or deleted. It does not touch SuperSync or run background synchronization.</p>
+  <strong class="status">EXPERIMENTAL · MANUAL OPT-IN WRITES</strong>
+  <p>Preview and property-ID pinning are read-only against Notion. Task import is separately authorized and creates only SP tasks; actual-time and habit-day writebacks require separate review and confirmation. No automatic sync, database creation or SuperSync modification.</p>
 </section>
 <section>
   <h2>1. Connect your existing Notion data sources</h2>
@@ -187,7 +187,7 @@ code {font:inherit;white-space:nowrap}
   <div class="actions"><button id="pushHabitDay">Write reviewed habit-day counts (no new records)</button></div>
   <p id="habitDayReport" role="status" aria-live="polite" class="muted"></p>
 </section>
-<footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release does not synchronize any changes.</footer>
+<footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release has manual opt-in writeback only; it does not run automatic synchronization.</footer>
 </main>
 <script>
 (function () {
