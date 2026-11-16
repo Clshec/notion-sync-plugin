@@ -188,6 +188,24 @@ if (typeof PluginAPI !== 'undefined') {
 //
 // Only individually seeded Notion-page/SP-task baseline IDs are eligible.
 // No import, no Notion writes, no timer control or automatic bidirectional sync.
+
+const ALF_AUTO_STATUS_KEY='alf-auto-status-local-v1-';
+async function alfStoreAutoStatus(api,flow,stats) {
+  if(typeof api.setSecret!=='function')return;
+  // Local-only diagnostic aggregates. Never expose page/task IDs, titles,
+  // Notion tokens, request details or full synced data in these records.
+  const numeric={};
+  for(const key of ['processed','updated','written','anchored','skipped',
+    'unchanged','conflicts','errors']) {
+    if(Number.isSafeInteger(stats&&stats[key])&&stats[key]>=0)
+      numeric[key]=stats[key];
+  }
+  const record={version:1,checkedAt:Date.now(),
+    outcome:numeric.errors>0?'errors':numeric.conflicts>0?'conflicts':'ok',
+    counts:numeric};
+  await api.setSecret(ALF_AUTO_STATUS_KEY+flow,JSON.stringify(record));
+}
+
 const ALF_AUTO_PLAN_FLAG = 'alf-auto-plan-local-enabled-v1';
 const ALF_AUTO_PLAN_BASELINE_PREFIX = 'alf-plan-anchor-v1-';
 const ALF_AUTO_PLAN_MAPPING_KEY = 'alf-mapping-v2';
@@ -401,6 +419,11 @@ function alfCreateAutoPlanSync(api, options) {
             (await api.loadSyncedData(key))!==raw) {
             stats.conflicts++;continue;
           }
+          // Disabling the device during an in-flight GET must cancel any
+          // not-yet-started local write; it is not a distributed transaction.
+          if(await api.getSecret(ALF_AUTO_PLAN_FLAG)!=='enabled') {
+            stats.conflicts++;continue;
+          }
           // No timeSpent, status, tag, notes, project, parent or Notion writes.
           await api.updateTask(anchor.spId,update,{isIgnoreShortSyntax:true});
           stats.updated++;
@@ -428,8 +451,10 @@ function alfCreateAutoPlanSync(api, options) {
       // Disabled devices do not open Notion connections or change SP tasks.
       if(await api.getSecret(ALF_AUTO_PLAN_FLAG)!=='enabled')return;
       lastRun=now;
-      await runOnce();
+      const stats=await runOnce();
+      await alfStoreAutoStatus(api,'planning',stats);
     } catch (_) {
+      try {await alfStoreAutoStatus(api,'planning',{errors:1});}catch(_){}
       if(api.log&&typeof api.log.warn==='function')
         api.log.warn('[Alf] Opt-in Notion planning check skipped');
     } finally {busy=false;}
@@ -443,7 +468,7 @@ function alfCreateAutoPlanSync(api, options) {
     if(interval!==null && typeof clearInterval==='function')clearInterval(interval);
     interval=null;
   }
-  return {runOnce,start,stop};
+  return {runOnce,start,stop,heartbeat};
 }
 
 
@@ -613,8 +638,10 @@ function alfCreateAutoTimeSync(api,options) {
     try{
       if(await api.getSecret(ALF_AUTO_TIME_FLAG)!=='enabled')return;
       lastRun=now;
-      await runOnce();
+      const stats=await runOnce();
+      await alfStoreAutoStatus(api,'time',stats);
     }catch(_){
+      try {await alfStoreAutoStatus(api,'time',{errors:1});}catch(_){}
       if(api.log&&typeof api.log.warn==='function')
         api.log.warn('[Alf] Automatic work-time export skipped (sandbox alpha)');
     }finally{busy=false;}
@@ -628,7 +655,7 @@ function alfCreateAutoTimeSync(api,options) {
     if(interval!==null&&typeof clearInterval==='function')clearInterval(interval);
     interval=null;
   }
-  return {runOnce,start,stop};
+  return {runOnce,start,stop,heartbeat};
 }
 
 
@@ -887,8 +914,10 @@ function alfCreateAutoHabitSync(api,options) {
     try {
       if(await api.getSecret(ALF_AUTO_HABIT_FLAG)!=='enabled')return;
       lastRun=now;
-      await runOnce();
+      const stats=await runOnce();
+      await alfStoreAutoStatus(api,'habits',stats);
     }catch(_) {
+      try {await alfStoreAutoStatus(api,'habits',{errors:1});}catch(_){}
       if(api.log&&typeof api.log.warn==='function')
         api.log.warn('[Alf] Automatic existing habit-day export skipped');
     }finally{busy=false;}
@@ -902,7 +931,7 @@ function alfCreateAutoHabitSync(api,options) {
     if(interval!==null&&typeof clearInterval==='function')clearInterval(interval);
     interval=null;
   }
-  return {runOnce,start,stop};
+  return {runOnce,start,stop,heartbeat};
 }
 
 if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
