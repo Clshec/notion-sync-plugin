@@ -72,6 +72,9 @@ code {font:inherit;white-space:nowrap}
     <label>Task title property (Title) <input id="titleProp" placeholder="e.g. Name / المصدر"></label>
     <label>Item type property (Multi-select or Select) <input id="typeProp" placeholder="e.g. Item Type / نوع الصفحة"></label>
     <label>Allowed task/bundle type values (comma separated) <input id="typeValues" placeholder="e.g. Task, Bundle / مهمة, حزمة"></label>
+    <label>Bundle type values (comma separated, a subset of allowed types)
+      <input id="bundleValues" placeholder="e.g. Bundle / حزمة">
+    </label>
     <label>Execution day property (Date) <input id="executionProp" placeholder="e.g. Execution Day / يوم التنفيذ"></label>
     <label>Deadline property (Date, optional) <input id="deadlineProp" placeholder="e.g. Deadline"></label>
     <label>Estimated time property (Number) <input id="estimateProp" placeholder="e.g. Planned Time / الوقت المخطط له"></label>
@@ -94,8 +97,21 @@ code {font:inherit;white-space:nowrap}
   <h2>3. Preview results</h2>
   <p id="summary" class="muted">No query has been made yet.</p>
   <div class="table-wrap">
-    <table><thead><tr><th>Notion task</th><th>Type</th><th>Execution day</th><th>Deadline</th><th>Estimate</th><th>Actual</th><th>Status</th></tr></thead><tbody id="results"></tbody></table>
+    <table><thead><tr><th>Select</th><th>Notion task</th><th>Type</th><th>Execution day</th><th>Deadline</th><th>Estimate</th><th>Actual</th><th>Status</th></tr></thead><tbody id="results"></tbody></table>
   </div>
+</section>
+<section>
+  <h2>4. Optional manual import into Super Productivity</h2>
+  <p>This action writes <strong>only to Super Productivity</strong>, never to Notion. Select individual rows in the preview above. Bundles import before subtasks, and a subtask is skipped rather than detached when its parent is missing. This is a testing feature, not automatic sync.</p>
+  <label>Destination SP project (required; no project auto-creation)
+    <select id="targetSpProject"><option value="">Select an existing SP project…</option></select>
+  </label>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeImport" type="checkbox" style="width:auto">
+    <span>I explicitly authorize creating only the checked tasks in the selected SP project.</span>
+  </label>
+  <div class="actions"><button id="importBtn">Import checked tasks to SP (NO NOTION WRITES)</button></div>
+  <p id="importReport" role="status" aria-live="polite" class="muted"></p>
 </section>
 <footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release does not synchronize any changes.</footer>
 </main>
@@ -103,11 +119,13 @@ code {font:inherit;white-space:nowrap}
 (function () {
   'use strict';
   var CFG_KEY = 'alf-mapping-v2';
+  var LINK_KEY = 'alf-task-links-v1';
+  var lastVisibleRows = [];
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
-    'executionProp','deadlineProp','estimateProp','actualProp','statusProp','projectProp','parentProp','unit'];
+    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','projectProp','parentProp','unit'];
   var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
     deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],
     statusProp:['status','select'],projectProp:['relation'],parentProp:['relation']};
@@ -127,7 +145,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','previewBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','previewBtn','importBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -275,8 +293,16 @@ code {font:inherit;white-space:nowrap}
       var tasks=await PluginAPI.getTasks();
       var tbody=ui('results');
       tbody.replaceChildren();
-      rows.slice(0,75).forEach(function(page){
+      lastVisibleRows = rows.slice(0,75);
+      lastVisibleRows.forEach(function(page){
         var p=page.properties||{}, tr=document.createElement('tr');
+        var selection=document.createElement('td'),checkbox=document.createElement('input');
+        checkbox.type='checkbox';
+        checkbox.className='rowSelector';
+        checkbox.dataset={pageId:page.id};
+        checkbox.setAttribute('aria-label','Select '+textValue(p[c.titleProp]));
+        selection.appendChild(checkbox);
+        tr.appendChild(selection);
         appendCell(tr,textValue(p[c.titleProp]));
         appendCell(tr,typeValue(p[c.typeProp]).join(', '));
         appendCell(tr,dateValue(p[c.executionProp]));
@@ -295,6 +321,149 @@ code {font:inherit;white-space:nowrap}
     } catch(e) { fail(e); }
     finally {busy(false);}
   }
+
+  function notionPageMarker(id) {
+    return 'alf-notion-page-id:' + id;
+  }
+  function getSelectedPages() {
+    var selections=Array.prototype.slice.call(document.querySelectorAll('.rowSelector'));
+    var chosen=new Set(selections.filter(function(c){return c.checked;})
+      .map(function(c){return c.dataset.pageId;}));
+    return lastVisibleRows.filter(function(page){return chosen.has(page.id);});
+  }
+  function relationId(page,field) {
+    if (!field) return '';
+    var prop=(page.properties||{})[field];
+    return prop && Array.isArray(prop.relation) && prop.relation[0] ? prop.relation[0].id : '';
+  }
+  function plannedDate(page,field,prefix) {
+    var prop=(page.properties||{})[field];
+    if (!prop || !prop.date || !prop.date.start) return {};
+    if (prop.date.end) throw new Error('Date range needs an explicit policy: ' + field);
+    var start=String(prop.date.start), dayKey=prefix+'Day', timeKey=prefix+'WithTime';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+      var testDate=new Date(start+'T00:00:00.000Z');
+      if (!Number.isFinite(testDate.getTime()) || testDate.toISOString().slice(0,10)!==start)
+        throw new Error('Invalid calendar day: ' + start);
+      return {[dayKey]:start};
+    }
+    if (!/(Z|[+-]\d{2}:\d{2})$/i.test(start)) throw new Error('Timed date needs timezone offset');
+    var n=Date.parse(start);
+    if (!Number.isFinite(n)) throw new Error('Invalid scheduled timestamp');
+    return {[timeKey]:n};
+  }
+  function estimateValue(page,config) {
+    var prop=(page.properties||{})[config.estimateProp];
+    if (!prop || prop.number===null || prop.number===undefined) return null;
+    var x=prop.number;
+    if (typeof x!=='number' || !Number.isFinite(x) || x<0)
+      throw new Error('Invalid time estimate for Notion task');
+    return x*(config.unit==='minutes'?60000:3600000);
+  }
+  function importOrder(pages,c) {
+    var chosen=new Map(pages.map(function(p){return [p.id,p];}));
+    var visiting=new Set(), done=new Set(), ordered=[];
+    function visit(page) {
+      if (done.has(page.id)) return;
+      if (visiting.has(page.id)) throw new Error('Cycle in Notion parent-task relations');
+      visiting.add(page.id);
+      var parent=relationId(page,c.parentProp);
+      if (parent && chosen.has(parent)) visit(chosen.get(parent));
+      visiting.delete(page.id);
+      done.add(page.id);
+      ordered.push(page);
+    }
+    pages.forEach(visit);
+    return ordered;
+  }
+  async function importChecked() {
+    if (active) return;
+    busy(true);
+    try {
+      if (!ui('authorizeImport').checked) throw new Error('Check the explicit import authorization box first');
+      var projectId=ui('targetSpProject').value;
+      if (!projectId) throw new Error('Choose an existing SP project first');
+      var projects=await PluginAPI.getAllProjects();
+      if (!projects.some(function(p){return p.id===projectId;})) throw new Error('Selected SP project is not available');
+      var config=getForm();
+      if (!config.taskSource || !config.titleProp || !config.typeProp)
+        throw new Error('Configure and preview a Notion task source first');
+      var selected=getSelectedPages();
+      if (!selected.length) throw new Error('Select at least one Notion task row to import');
+      var allowed=String(config.typeValues||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
+      var entries=selected.filter(function(page){
+        return typeValue((page.properties||{})[config.typeProp]).some(function(t){return allowed.includes(t);});
+      });
+      if (entries.length!==selected.length) throw new Error('One selected item is outside the allowed type filter');
+      var existing=await PluginAPI.getTasks();
+      var archived=await PluginAPI.getArchivedTasks();
+      var allTasks=[].concat(existing||[],archived||[]);
+      var raw=await PluginAPI.loadSyncedData(LINK_KEY);
+      var links=raw ? JSON.parse(raw) : {};
+      if (!links || typeof links!=='object' || Array.isArray(links)) throw new Error('Invalid existing task link index');
+      var stats={created:0,skipped:0,failed:0,errors:[]};
+      var ordered=importOrder(entries,config);
+      for (var page of ordered) {
+        try {
+          var props=page.properties||{},id=page.id;
+          var marker=notionPageMarker(id);
+          var link=links[id];
+          var found=allTasks.find(function(t){return t.id===link ||
+            (typeof t.notes==='string' && t.notes.includes(marker));});
+          if (found) {
+            if (!link) {
+              links[id]=found.id;
+              await PluginAPI.persistDataSynced(JSON.stringify(links),LINK_KEY);
+            }
+            stats.skipped++;
+            continue;
+          }
+          if (link) {stats.skipped++;stats.errors.push('Existing task link points to missing SP task: '+id);continue;}
+          var parent=relationId(page,config.parentProp);
+          if (parent && !links[parent]) {
+            stats.skipped++;
+            stats.errors.push('Skipped subtask: import its parent bundle first ('+id+')');
+            continue;
+          }
+          var title=textValue(props[config.titleProp]);
+          if (!title.trim()) {stats.skipped++;stats.errors.push('Empty Notion task title: '+id);continue;}
+          var due=plannedDate(page,config.executionProp,'due');
+          var deadline=plannedDate(page,config.deadlineProp,'deadline');
+          var estimate=estimateValue(page,config);
+          var payload={
+            title:title,projectId:projectId,notes:marker,
+            isIgnoreShortSyntax:true
+          };
+          if (parent) payload.parentId=links[parent];
+          if (typeof estimate==='number') payload.timeEstimate=estimate;
+          if (due.dueDay) payload.dueDay=due.dueDay;
+          // All item creation is explicitly local; no Notion API updates.
+          var spId=await PluginAPI.addTask(payload);
+          // Persist ID immediately after creation for crash-safe retry.
+          links[id]=spId;
+          await PluginAPI.persistDataSynced(JSON.stringify(links),LINK_KEY);
+          allTasks.push({id:spId,notes:marker,title:title});
+          var updates={};
+          if (due.dueWithTime!==undefined) updates.dueWithTime=due.dueWithTime;
+          if (deadline.deadlineDay) updates.deadlineDay=deadline.deadlineDay;
+          if (deadline.deadlineWithTime!==undefined) updates.deadlineWithTime=deadline.deadlineWithTime;
+          if (Object.keys(updates).length) await PluginAPI.updateTask(spId,updates);
+          stats.created++;
+        } catch(e) {
+          stats.failed++;
+          stats.errors.push(String(e && e.message || e).slice(0,160));
+        }
+      }
+      ui('importReport').textContent=
+        'Created '+stats.created+', skipped '+stats.skipped+', failed '+stats.failed+
+        '. '+stats.errors.slice(0,8).join('; ')+
+        '. No Notion writes. Run the preview again before another import.';
+      ui('authorizeImport').checked=false;
+      // No second sync or auto-import; subsequent import requires re-authorization.
+    } catch(e) {fail(e);}
+    finally {busy(false);}
+  }
+
   async function init() {
     try {
       var saved=await PluginAPI.loadSyncedData(CFG_KEY);
@@ -310,6 +479,18 @@ code {font:inherit;white-space:nowrap}
     ui('disconnect').addEventListener('click',disconnect);
     ui('schemaBtn').addEventListener('click',inspect);
     ui('previewBtn').addEventListener('click',preview);
+    ui('importBtn').addEventListener('click',importChecked);
+    try {
+      var projects=await PluginAPI.getAllProjects();
+      var selector=ui('targetSpProject');
+      (projects||[]).forEach(function (p) {
+        if (!p || !p.id) return;
+        var option=document.createElement('option');
+        option.value=p.id;
+        option.textContent=p.title||p.id;
+        selector.appendChild(option);
+      });
+    } catch(e) { fail(e); }
   }
   function boot() {
     if (!window.PluginAPI) {setTimeout(boot,100);return;}
