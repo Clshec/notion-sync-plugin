@@ -281,6 +281,25 @@ code {font:inherit;white-space:nowrap}
   <p class="muted"><small>Every approval replaces the complete set of permitted habits on THIS device; older synced approval history cannot add them back. Disable clears the local writer flag and this device's grant list. To authorize a different set, preview the current existing day and opt in again; the earlier set will no longer write.</small></p>
 </section>
 <section>
+  <h2>8c. Mark an existing daily habit Done — reviewed Status only</h2>
+  <p>For boards without a separate habit-count Number, you can review a positive SP SimpleCounter against an <strong>existing</strong> Notion habit-day page, then explicitly mark its existing Status as completed. A positive count is <strong>not proof that a habit target was reached</strong>: review each proposed change first. No numeric count, work time, relation, new page or counter is written. This is a manual action only, never background automation.</p>
+  <div class="grid">
+    <label>Existing completed Status/Select option (must already exist)
+      <input id="habitDoneStatusValue" value="Done" placeholder="e.g. Done"></label>
+    <label>Existing eligible unfinished statuses (comma separated)
+      <input id="habitOpenStatusValues" value="Not started" placeholder="e.g. Not started, In progress"></label>
+  </div>
+  <p class="muted">Uses the task Status mapping above and the pinned habit occurrence type, relation and date fields; no habit numeric field required. Link definitions to counters first and pin task Status plus the three occurrence property IDs.</p>
+  <div class="actions"><button id="previewHabitStatusBtn">Review existing habit-day Status changes (NO WRITES)</button></div>
+  <pre id="habitStatusPlan" style="white-space:pre-wrap;max-height:250px;overflow:auto"></pre>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeHabitStatus" type="checkbox" style="width:auto">
+    <span>I checked the listed habits reached their goal and authorize only these exact existing Status changes.</span>
+  </label>
+  <div class="actions"><button id="pushHabitStatusBtn">Mark reviewed existing habit-day records Done</button></div>
+  <p id="habitStatusReport" role="status" aria-live="polite" class="muted"></p>
+</section>
+<section>
   <h2>9. Automatic synchronization diagnostics (THIS DEVICE)</h2>
   <p>Read-only local diagnostics for the three optional engines: Notion → SP planning, SP → Notion actual time and SP → existing Notion habit-day counts. These status records contain only time and counters: no Notion token, task names or page IDs. They stay local and are not copied by SuperSync.</p>
   <div class="actions"><button id="refreshAutoStatusBtn">Read last local automatic sync checks (NO WRITES)</button></div>
@@ -300,6 +319,7 @@ code {font:inherit;white-space:nowrap}
   var stagedPlanRefresh = null;
   var habitPreview = null;
   var stagedHabitDay = null;
+  var stagedHabitStatus = null;
   var stagedObservedPomo = null;
   var taskPropertyBindings = {};
   var habitPropertyBindings = {definitions:{},occurrences:{}};
@@ -316,7 +336,7 @@ code {font:inherit;white-space:nowrap}
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
-    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','observedPomoProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','pomodoroWorkMinutes','habitTitleProp','habitCadenceProp','habitOccTypeProp','habitOccTypeValue','habitOccRelationProp','habitOccDayProp','habitOccCountProp','habitOccUnit'];
+    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','observedPomoProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','pomodoroWorkMinutes','habitTitleProp','habitCadenceProp','habitOccTypeProp','habitOccTypeValue','habitOccRelationProp','habitOccDayProp','habitOccCountProp','habitOccUnit','habitDoneStatusValue','habitOpenStatusValues'];
   var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
     deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],observedPomoProp:['number'],
     statusProp:['status','select'],priorityProp:['select'],projectProp:['relation'],parentProp:['relation']};
@@ -336,7 +356,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -463,7 +483,7 @@ code {font:inherit;white-space:nowrap}
         taskPropertyBindings:next
       })),CFG_KEY);
       taskPropertyBindings=next;
-      lastPreviewConfig=null;stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;stagedObservedPomo=null;
+      lastPreviewConfig=null;stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;stagedHabitStatus=null;stagedObservedPomo=null;
       ui('authorizeTime').checked=false;
       message('Pinned '+count+' stable task property IDs in synced plugin metadata only. Rename-safe for these fields. Re-run task preview; Notion was not changed.');
     }catch(e){fail(e);}
@@ -1723,7 +1743,7 @@ code {font:inherit;white-space:nowrap}
       var saved=Object.assign({},c,{habitPropertyBindings:next});
       await PluginAPI.persistDataSynced(JSON.stringify(saved),CFG_KEY);
       habitPropertyBindings=next;
-      habitPreview=null;stagedHabitDay=null;
+      habitPreview=null;stagedHabitDay=null;stagedHabitStatus=null;
       ui('authorizeHabitDay').checked=false;
       ui('habitDayPlan').textContent='';
       message('Pinned '+count+' existing habit field IDs in plugin mapping only. No Notion record, property or database changed. Re-preview habits.');
@@ -1876,17 +1896,19 @@ code {font:inherit;white-space:nowrap}
     // Strict date-only; a timestamp needs explicit timezone policy before writing.
     return !!date && typeof date.start==='string' && date.start===day && !date.end;
   }
-  function validateOccurrenceMapping(schema,c) {
+  function validateOccurrenceMapping(schema,c,requireNumber) {
+    var numeric = requireNumber!==false;
     // Do not store a ClickCounter total in the same Notion field that means
     // tracked work hours (or another incompatible duration unit).
-    var countField=habitSchemaProperty(schema,c,'habitOccCountProp');
-    var actualField=schemaTaskProperty(schema,c,'actualProp');
-    if(c.actualProp&&countField&&actualField&&
+    var countField=numeric&&habitSchemaProperty(schema,c,'habitOccCountProp');
+    var actualField=numeric&&schemaTaskProperty(schema,c,'actualProp');
+    if(numeric&&c.actualProp&&countField&&actualField&&
        ((countField.id&&actualField.id&&countField.id===actualField.id)||
         c.habitOccCountProp===c.actualProp) &&
        (c.habitOccUnit==='count'||c.habitOccUnit!==c.unit))
       throw new Error('Habit count/duration unit conflicts with the existing Actual Time Number field');
     for(var key of Object.keys(HABIT_OCCURRENCE_FIELDS)) {
+      if(!numeric&&key==='habitOccCountProp')continue;
       var prop=habitSchemaProperty(schema,c,key);
       if(!prop || !HABIT_OCCURRENCE_FIELDS[key].includes(prop.type))
         throw new Error('Missing or incompatible existing Notion occurrence property: '+key);
@@ -1895,10 +1917,10 @@ code {font:inherit;white-space:nowrap}
     }
     if(!c.habitOccTypeValue) throw new Error('Select the exact Notion habit item type value');
   }
-  async function queryExistingHabitDay(c,day,sourceId,schema) {
+  async function queryExistingHabitDay(c,day,sourceId,schema,requireNumber) {
     // Query the exact existing board source and all matching date/type pages.
     // Never choose a single page from a potentially truncated result.
-    validateOccurrenceMapping(schema,c);
+    validateOccurrenceMapping(schema,c,requireNumber);
     var kind=habitSchemaProperty(schema,c,'habitOccTypeProp').type;
     var typeFilter={property:habitWriteKey(c,'habitOccTypeProp')};
     typeFilter[kind]={};
@@ -2174,6 +2196,164 @@ code {font:inherit;white-space:nowrap}
   }
 
 
+  // Manual-only completion path for the existing board Status; never export
+  // a ClickCounter into the unrelated work-hours Number column.
+  function verifiedHabitStatusSpec(schema,c) {
+    validateOccurrenceMapping(schema,c,false);
+    var fieldId=taskPropertyId(c,'statusProp');
+    var field=schemaTaskProperty(schema,c,'statusProp');
+    if(!c.statusProp||!fieldId||!field||field.id!==fieldId||
+       !['status','select'].includes(field.type))
+      throw new Error('Pin existing Status/Select property ID before habit completion');
+    // Official Notion REST schema nests options inside .status/.select.
+    // The flattened fallback supports older schema inspectors only.
+    var options=field.type==='select'?
+      ((field.select&&field.select.options)||field.options||[]):
+      ((field.status&&field.status.options)||field.options||
+      Object.values(field.groups||{}).flatMap(function(g){
+        return Array.isArray(g)?g:Object.values(g||{}).flat();
+      }));
+    var names=options.map(function(o){return o&&o.name;}).filter(Boolean);
+    var done=c.habitDoneStatusValue,open=splitValues(c.habitOpenStatusValues);
+    if(!done||!open.length||open.includes(done)||!names.includes(done)||
+       open.some(function(s){return !names.includes(s);}))
+      throw new Error('Use exact, distinct EXISTING unfinished/Done Status options');
+    return {fieldId:fieldId,type:field.type,done:done,open:open};
+  }
+  function positiveHabitUse(counter,day) {
+    if(!counter||counter.isEnabled!==true||!['ClickCounter','StopWatch'].includes(counter.type))
+      return null;
+    var n=counter.countOnDay&&counter.countOnDay[day];
+    return Number.isFinite(n)&&n>0&&
+      (counter.type!=='ClickCounter'||Number.isSafeInteger(n))?n:null;
+  }
+  async function safeHabitCounterLinks(c) {
+    if(typeof PluginAPI.listSyncedDataKeys!=='function')
+      throw new Error('SP habit link inventory unavailable');
+    var keys=await PluginAPI.listSyncedDataKeys(HABIT_KEY_PREFIX);
+    if(!Array.isArray(keys))throw new Error('Invalid SP habit link inventory');
+    var byHabit=new Map(),owners=new Map();
+    for(var key of keys) {
+      if(typeof key!=='string'||!key.startsWith(HABIT_KEY_PREFIX))continue;
+      var raw=await PluginAPI.loadSyncedData(key),link;
+      try{link=raw?JSON.parse(raw):null;}catch(_){continue;}
+      if(!link||typeof link.notionId!=='string'||!link.spCounterId||
+         normalizedUUID(link.notionSourceId)!==dataSourceId(c.habitSource,false)||
+         key!==HABIT_KEY_PREFIX+link.notionId)continue;
+      byHabit.set(normalizedUUID(link.notionId),link);
+      var owner=owners.get(link.spCounterId),id=normalizedUUID(link.notionId);
+      owners.set(link.spCounterId,owner&&owner!==id?'ambiguous':(owner||id));
+    }
+    return {byHabit:byHabit,owners:owners};
+  }
+  async function stageHabitStatus() {
+    if(active)return;
+    busy(true);
+    stagedHabitStatus=null;
+    ui('authorizeHabitStatus').checked=false;
+    ui('habitStatusPlan').textContent='';
+    try {
+      var c=getForm(),sourceId=dataSourceId(c.taskSource,false);
+      if(typeof PluginAPI.getDayContext!=='function')throw new Error('SP day API missing');
+      var ctx=await PluginAPI.getDayContext(),day=ctx&&ctx.todayStr;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(day||''))throw new Error('Invalid logical day');
+      var info=await notion('/data_sources/'+encodeURIComponent(sourceId));
+      var spec=verifiedHabitStatusSpec(info.properties||{},c);
+      var entries=await queryExistingHabitDay(c,day,sourceId,info.properties||{},false);
+      var groups=habitDayCandidates(entries,c,day),links=await safeHabitCounterLinks(c);
+      var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
+      var changes=[],skipped=[];
+      for(var page of entries) {
+        if(!occurrenceMatches(page,c,day))continue;
+        var habitId=habitRelId(page,c);
+        if(!habitId||(groups.get(normalizedUUID(habitId)+':'+day)||[]).length!==1){
+          skipped.push('Duplicate/missing habit-day relation: '+page.id);continue;
+        }
+        var link=links.byHabit.get(normalizedUUID(habitId));
+        if(!link||links.owners.get(link.spCounterId)==='ambiguous'){
+          skipped.push('Missing/ambiguous counter link: '+page.id);continue;
+        }
+        var n=positiveHabitUse(counters[link.spCounterId],day);
+        var field=taskProperty(page,c,'statusProp'),before=statusValue(field);
+        if(n===null||!field||field.id!==spec.fieldId||field.type!==spec.type||
+           !spec.open.includes(before)) {
+          skipped.push('No positive counter or approved unfinished Status: '+page.id);continue;
+        }
+        changes.push({pageId:page.id,habitId:habitId,counterId:link.spCounterId,
+          observed:n,before:before,day:day});
+      }
+      stagedHabitStatus={config:JSON.stringify(c),sourceId:sourceId,day:day,
+        spec:spec,updates:changes};
+      ui('habitStatusPlan').textContent='CHECK GOAL MANUALLY: a positive counter is not proof of completion.\n'+
+        'Logical day '+day+'; '+changes.length+' proposed EXISTING Status changes (NO WRITES).\n'+
+        changes.map(function(e){return e.pageId+' ['+e.habitId+'] '+e.before+
+          ' → '+spec.done+'; observed counter '+e.counterId;}).join('\n')+
+        (skipped.length?'\nSkipped:\n'+skipped.join('\n'):'');
+      message('Habit Status preview completed without changing Notion or SP.');
+    }catch(e){stagedHabitStatus=null;fail(e);}
+    finally{busy(false);}
+  }
+  async function commitHabitStatus() {
+    if(active)return;
+    busy(true);
+    try {
+      if(!ui('authorizeHabitStatus').checked)
+        throw new Error('Explicitly approve the reviewed habit Status changes');
+      var c=getForm(),plan=stagedHabitStatus;
+      if(!plan||!plan.updates.length||plan.config!==JSON.stringify(c)||
+         plan.sourceId!==dataSourceId(c.taskSource,false))
+        throw new Error('No current approved habit Status preview');
+      var ctx=await PluginAPI.getDayContext();
+      if(!ctx||ctx.todayStr!==plan.day)throw new Error('Logical day changed');
+      var info=await notion('/data_sources/'+encodeURIComponent(plan.sourceId));
+      var spec=verifiedHabitStatusSpec(info.properties||{},c);
+      if(JSON.stringify(spec)!==JSON.stringify(plan.spec))
+        throw new Error('Status mapping changed since preview');
+      var rows=await queryExistingHabitDay(c,plan.day,plan.sourceId,info.properties||{},false);
+      var groups=habitDayCandidates(rows,c,plan.day),links=await safeHabitCounterLinks(c);
+      var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
+      var written=0,skipped=0,notes=[];
+      for(var e of plan.updates) {
+        try {
+          var matches=groups.get(normalizedUUID(e.habitId)+':'+plan.day)||[];
+          var link=links.byHabit.get(normalizedUUID(e.habitId));
+          if(matches.length!==1||matches[0]!==e.pageId||!link||
+             link.spCounterId!==e.counterId||
+             links.owners.get(link.spCounterId)==='ambiguous'||
+             !Object.is(positiveHabitUse(counters[e.counterId],plan.day),e.observed)) {
+            skipped++;notes.push('Habit/day/counter changed: '+e.pageId);continue;
+          }
+          var page=await notion('/pages/'+encodeURIComponent(e.pageId));
+          var field=taskProperty(page,c,'statusProp');
+          if(!page||page.object!=='page'||page.in_trash||
+             normalizedUUID(page.parent&&page.parent.data_source_id)!==plan.sourceId||
+             !occurrenceMatches(page,c,plan.day)||
+             normalizedUUID(habitRelId(page,c))!==normalizedUUID(e.habitId)||
+             !field||field.type!==spec.type||field.id!==spec.fieldId||
+             statusValue(field)!==e.before) {
+            skipped++;notes.push('Notion source/relation/Status changed: '+e.pageId);continue;
+          }
+          if(!ui('authorizeHabitStatus').checked||plan.config!==JSON.stringify(getForm()))
+            throw new Error('Consent/configuration revoked before PATCH');
+          var patch={properties:{}};
+          patch.properties[spec.fieldId]=spec.type==='status'?
+            {status:{name:spec.done}}:{select:{name:spec.done}};
+          var response=await notion('/pages/'+encodeURIComponent(e.pageId),'PATCH',patch);
+          if(!response||response.object!=='page'||response.id!==e.pageId)
+            throw new Error('Notion PATCH unconfirmed; re-preview instead of replay');
+          written++;
+        }catch(ex){skipped++;notes.push(e.pageId+': '+String(ex&&ex.message||ex).slice(0,120));}
+      }
+      ui('habitStatusReport').textContent=written+' existing Status updates; '+
+        skipped+' conflicts/skips. '+notes.slice(0,10).join('; ')+
+        '. No new Notion pages, properties, relations or numeric values.';
+      stagedHabitStatus=null;
+      ui('authorizeHabitStatus').checked=false;
+      ui('habitStatusPlan').textContent='Re-preview before any retry or additional writes.';
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
   async function refreshAutoDiagnostics() {
     if(active)return;
     busy(true);
@@ -2259,6 +2439,8 @@ code {font:inherit;white-space:nowrap}
     ui('saveHabitMappings').addEventListener('click',saveHabitMappings);
     ui('previewHabitDay').addEventListener('click',stageHabitDay);
     ui('pushHabitDay').addEventListener('click',commitHabitDay);
+    ui('previewHabitStatusBtn').addEventListener('click',stageHabitStatus);
+    ui('pushHabitStatusBtn').addEventListener('click',commitHabitStatus);
     ui('enableAutoHabitsBtn').addEventListener('click',enableLocalAutomaticHabits);
     ui('disableAutoHabitsBtn').addEventListener('click',disableLocalAutomaticHabits);
     ui('refreshAutoStatusBtn').addEventListener('click',refreshAutoDiagnostics);
