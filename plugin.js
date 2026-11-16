@@ -201,8 +201,10 @@ function alfExplicitRateLimit(error) {
   const code=Number(error.status || error.statusCode ||
     (error.response&&error.response.status) ||
     (error.error&&error.error.status));
-  return code===429 || error.code==='rate_limited' ||
-    /(?:\b429\b|rate.?limit)/i.test(String(error.message||''));
+  // A textual error is NOT proof that the HTTP server rejected a PATCH.
+  // A broken connection may mention "rate limit" after Notion committed it.
+  // Re-attempt only with explicit, machine-readable HTTP 429 status.
+  return code===429;
 }
 async function alfNotionDelay(ms) {
   if(ms>0 && typeof setTimeout==='function')

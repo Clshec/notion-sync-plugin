@@ -125,3 +125,7 @@ Updated the stale v0.4 README opening and plugin intro to reflect the **three in
 ## v0.24 milestone — reject multi-page SP task markers
 
 The earlier strict-token matching still allowed a task's editable notes to contain two different exact Notion page ID tokens. Such a task could appear linked to two pages, and its work time could be counted twice. Introduced a shared host-side exact **single** marker requirement and matching UI rule: any repeated or competing original Notion page token blocks manual import adoption, reviewed planning/time/focus association, and opt-in automatic planning/actual-time update. Independent persisted Notion↔SP link remains mandatory. Regression tests ensure no mutation and no relink for a multi-page claim. No user profile/Notion data accessed; full end-to-end Notion/Android test gates still open.
+
+## v0.25 — only explicit HTTP 429 authorizes re-attempt
+
+Closed a potential unsafe automatic Number PATCH replay: v0.20 would retry on text `rate limit` or a `rate_limited` code even without a confirmed HTTP rejection. v0.25 demands structured HTTP status 429 before one bounded retry, never retries timeout/503/connection reset/unknown outcome even if the text mentions 429. Simulated network-failure-after-Notion-write tests verify exactly one attempt. Real cross-device atomicity and integration checks remain pending.
