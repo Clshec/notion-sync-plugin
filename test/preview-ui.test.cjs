@@ -11,7 +11,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const host = fs.readFileSync(path.join(root, 'plugin.js'), 'utf8');
 
-function mount(customRows) {
+function mount(customRows, habitRows) {
   const els = new Map();
   const requests = [];
   const stores = [];
@@ -34,6 +34,15 @@ function mount(customRows) {
     }
     return els.get(id);
   }
+  const habitSchema = {
+    'العادة': {type:'title'},
+    'التكرار': {type:'select'}
+  };
+  const habitId='212b4a624b7d8050a6aa000b01b292b8';
+  const counters = {
+    a:{id:'a',title:'Read 20m',type:'ClickCounter',isEnabled:true,countOnDay:{}},
+    b:{id:'b',title:'Practice',type:'StopWatch',isEnabled:true,countOnDay:{}}
+  };
   const schema = {
     'المصدر': { type: 'title' },
     'نوع الصفحة': { type: 'multi_select' },
@@ -54,6 +63,7 @@ function mount(customRows) {
     async getTasks() { return existingTasks; },
     async getArchivedTasks() { return []; },
     async getAllProjects() {return [{id:'projectX',title:'Sandbox Project'}];},
+    async getAppState(){return {simpleCounters:counters};},
     async addTask(task) {
       imports.push(task);
       const id='created'+imports.length;
@@ -65,7 +75,8 @@ function mount(customRows) {
       requests.push({url,opts});
       assert.equal(new URL(url).host, 'api.notion.com');
       assert.ok(opts.headers['Notion-Version']);
-      if (opts.method==='GET' && url.includes('/data_sources/')) return {properties:schema};
+      if (opts.method==='GET' && url.includes('/data_sources/'))
+        return {properties:url.endsWith(habitId)?habitSchema:schema};
       if (opts.method==='GET' && url.includes('/pages/')) {
         const id=url.split('/').pop();
         const page=(customRows||[]).find(p=>p.id===id);
@@ -85,6 +96,8 @@ function mount(customRows) {
         page.properties[name]={type:'number',number:field.number};
         return page;
       }
+      if (opts.method==='POST' && url.endsWith(habitId+'/query'))
+        return {results:habitRows||[],has_more:false,next_cursor:null};
       if (opts.method==='POST') return {results: customRows || [
         {object:'page',id:'n1',properties:{
           'المصدر':{title:[{plain_text:'Sample task'}]},
@@ -104,10 +117,15 @@ function mount(customRows) {
   const document = {
     getElementById:element,
     querySelectorAll(selector) {
-      if (selector!=='.rowSelector') throw new Error('Unexpected selector '+selector);
-      return element('results').children.flatMap(
-        row=>row.children.flatMap(cell=>cell.children||[])
-      ).filter(child=>child.className==='rowSelector');
+      if (selector==='.rowSelector')
+        return element('results').children.flatMap(
+          row=>row.children.flatMap(cell=>cell.children||[])
+        ).filter(child=>child.className==='rowSelector');
+      if (selector==='.habitCounterSelect')
+        return element('habitRows').children.flatMap(
+          row=>row.children.flatMap(cell=>cell.children||[])
+        ).filter(child=>child.className==='habitCounterSelect');
+      throw new Error('Unexpected selector '+selector);
     },
     createElement(tag) {
       return {tag, textContent:'',children:[],checked:false,dataset:{},
@@ -121,7 +139,7 @@ function mount(customRows) {
     PluginAPI:api,window:{PluginAPI:api},document,setTimeout,
     URL,console
   });
-  return {els:element,requests,stores,secretWrites,api,imports,updates,existingTasks};
+  return {els:element,requests,stores,secretWrites,api,imports,updates,existingTasks,habitId,counters};
 }
 
 function configure(env) {
@@ -429,4 +447,72 @@ test('parent task rollup is excluded from actual-time writeback',async()=>{
   env.els('authorizeTime').checked=true;
   await env.els('pushTimeBtn').events.click();
   assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+});
+
+
+test('Notion habit definitions are previewed against existing SP counters with no writes',async()=>{
+  const defs=[
+    {object:'page',id:'habit-notion-1',properties:{
+      'العادة':{type:'title',title:[{plain_text:'Read daily'}]},
+      'التكرار':{type:'select',select:{name:'Daily'}}
+    }},
+    {object:'page',id:'habit-notion-2',properties:{
+      'العادة':{type:'title',title:[{plain_text:'Workout'}]},
+      'التكرار':{type:'select',select:{name:'Weekly'}}
+    }}
+  ];
+  const env=mount(null,defs);
+  await new Promise(resolve=>setImmediate(resolve));
+  env.els('habitSource').value=env.habitId;
+  env.els('habitTitleProp').value='العادة';
+  env.els('habitCadenceProp').value='التكرار';
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewHabits').events.click();
+  assert.equal(env.els('habitRows').children.length,2);
+  assert.equal(env.els('habitRows').children[0].children[0].textContent,'Read daily');
+  assert.match(env.els('habitReport').textContent,/2 existing Notion habit definitions/);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-')).length,0);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('explicit habit mapping persists only the IDs and never creates a Notion occurrence',async()=>{
+  const defs=[{object:'page',id:'habit-notion-1',properties:{
+    'العادة':{type:'title',title:[{plain_text:'Read daily'}]}
+  }}];
+  const env=mount(null,defs);
+  await new Promise(resolve=>setImmediate(resolve));
+  env.els('habitSource').value=env.habitId;
+  env.els('habitTitleProp').value='العادة';
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewHabits').events.click();
+  const select=env.els('habitRows').children[0].children[2].children[0];
+  select.value='a';
+  await env.els('saveHabitMappings').events.click();
+  const links=env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-'));
+  assert.equal(links.length,1);
+  const parsed=JSON.parse(links[0].data);
+  assert.equal(parsed.notionId,'habit-notion-1');
+  assert.equal(parsed.spCounterId,'a');
+  assert.equal(parsed.notionSourceId,env.habitId);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(env.imports.length,0);
+});
+
+test('habit mapping prevents one SP counter being linked twice in same preview',async()=>{
+  const defs=['h1','h2'].map(id=>({object:'page',id,properties:{
+    'العادة':{type:'title',title:[{plain_text:id}]}
+  }}));
+  const env=mount(null,defs);
+  await new Promise(resolve=>setImmediate(resolve));
+  env.els('habitSource').value=env.habitId;
+  env.els('habitTitleProp').value='العادة';
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewHabits').events.click();
+  env.els('habitRows').children.forEach(row=>{row.children[2].children[0].value='a';});
+  await env.els('saveHabitMappings').events.click();
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-')).length,0);
+  assert.match(env.els('notice').textContent,/multiple Notion/);
 });
