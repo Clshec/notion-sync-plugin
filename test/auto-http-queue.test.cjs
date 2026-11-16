@@ -100,3 +100,45 @@ test('queue recovers after failed request without blocking another engine',async
   assert.equal(results[1].status,'fulfilled');
   assert.equal(order.length,2);
 });
+
+
+test('ambiguous PATCH response mentioning rate limit never triggers a second write',async()=>{
+  const h=harness();
+  let attempts=0,applied=0;
+  const api={async request(){
+    attempts++;applied++;
+    throw Object.assign(new Error('connection closed after rate limit gateway, server outcome unknown'),{
+      code:'rate_limited'
+    });
+  }};
+  await assert.rejects(h.queued(api,'https://api.notion.com/v1/pages/p',
+    {method:'PATCH',body:{properties:{field:{number:7}}}}),/outcome unknown/);
+  assert.equal(attempts,1,'error strings and a non-HTTP error code are not proof of 429');
+  assert.equal(applied,1,'no second possible mutation');
+});
+test('ambiguous PATCH error message containing 429 but HTTP status 503 never retries',async()=>{
+  const h=harness();
+  let attempts=0;
+  const api={async request(){
+    attempts++;
+    throw Object.assign(new Error('upstream says 429 rate limit'),{status:503});
+  }};
+  await assert.rejects(h.queued(api,'https://api.notion.com/v1/pages/p',
+    {method:'PATCH'}),/upstream says 429/);
+  assert.equal(attempts,1);
+});
+test('machine-readable nested HTTP 429 can be retried exactly once',async()=>{
+  const h=harness();
+  let attempts=0;
+  const api={async request(){
+    attempts++;
+    if(attempts===1)
+      throw Object.assign(new Error('Notion refused this request'),{
+        response:{status:429,headers:{'retry-after':'1'}}
+      });
+    return {object:'page',id:'p'};
+  }};
+  const out=await h.queued(api,'https://api.notion.com/v1/pages/p',{method:'GET'});
+  assert.equal(attempts,2);
+  assert.equal(out.id,'p');
+});
