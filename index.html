@@ -1016,13 +1016,13 @@ code {font:inherit;white-space:nowrap}
         selection:selected.map(function(p){return p.id;}).sort().join(','),
         updates:staged};
       ui('observedPomoPlan').textContent=
-        'PARTIAL OBSERVER MINIMUM — NOT HISTORICAL COMPLETED POMODOROS\\n'+
-        staged.length+' reviewed, monotonic updates (not applied).\\n'+
+        'PARTIAL OBSERVER MINIMUM — NOT HISTORICAL COMPLETED POMODOROS\n'+
+        staged.length+' reviewed, monotonic updates (not applied).\n'+
         staged.map(function(e){return e.title+' ['+e.notionId+'] '+e.before+
-          ' → '+e.after+' unique observed automatic Pomodoros';}).join('\\n')+
-        '\\nObserver keys: '+ledger.indexed+'; nonqualifying/invalid: '+ledger.rejected+
-        (skipped.length?'\\nSkipped:\\n'+skipped.join('\\n'):'')+
-        '\\nNo Notion write or database/property creation.';
+          ' → '+e.after+' unique observed automatic Pomodoros';}).join('\n')+
+        '\nObserver keys: '+ledger.indexed+'; nonqualifying/invalid: '+ledger.rejected+
+        (skipped.length?'\nSkipped:\n'+skipped.join('\n'):'')+
+        '\nNo Notion write or database/property creation.';
       message('Observed minimum preview ready. Review then separately authorize any write.');
     }catch(e){fail(e);}
     finally{busy(false);}
