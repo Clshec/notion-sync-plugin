@@ -202,7 +202,7 @@ function alfExplicitRateLimit(error) {
     (error.response&&error.response.status) ||
     (error.error&&error.error.status));
   return code===429 || error.code==='rate_limited' ||
-    /(?:\\b429\\b|rate.?limit)/i.test(String(error.message||''));
+    /(?:\b429\b|rate.?limit)/i.test(String(error.message||''));
 }
 async function alfNotionDelay(ms) {
   if(ms>0 && typeof setTimeout==='function')
