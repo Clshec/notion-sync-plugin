@@ -75,3 +75,7 @@ To convert these drafts to live Issues, enable Issues and re-run GitHub create_i
 ## v0.10 milestone: optional lower-bound observer writeback
 
 Implemented (experimental): explicit consented preview/PATCH into a **pre-existing, separately labeled observed Pomodoros Number property**; stable property ID, Notion item/source and SP task identity revalidation, session ID deduplication, monotonic-only values and 2,000-record safety ceiling. This remains a manual partial lower bound and **does not satisfy** P0 authoritative completed Pomodoros, historical backfill, Android offline delivery or automated sync criteria above. All schema changes remain the Notion user's responsibility; zero new databases or properties are made by the plugin.
+
+## v0.11 milestone: reviewed Notion planning refresh for already-linked SP tasks
+
+Implemented in plugin UI: select existing Notion tasks, stage field-level differences against individually linked active, unfinished, non-recurring SP tasks, authorize the exact changes, and refresh their `title`, `timeEstimate`, `dueDay` and `dueWithTime`. Empty Notion values do not clear SP data. Revalidation checks Notion source ID, item type, plan values, local SP task link, task hierarchy and the original local field values. A Notion plan change or offline local edit after staging skips the changed item. No write is performed to Notion, and actual work, completion, habits and SuperSync are untouched. This is manual one-way planning reconciliation, **not** complete automatic two-way sync or historical Pomodoro export.
