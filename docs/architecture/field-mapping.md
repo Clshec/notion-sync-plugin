@@ -80,3 +80,9 @@ Do not round to two decimal hours if that would discard meaningful tracked time.
 - Change Notion plan while SP offline; reconcile without losing tracked work.
 - Missing `Deadline` does not block other fields or create a property silently.
 - Pomodoro target and actual count remain distinct, and actual counts require completed focus events.
+
+### Stable Notion property identities (v0.8 implementation)
+
+Existing task property names are **not** stable IDs: users may rename `الوقت المخطط له` to `Planned Time` without changing the underlying property. The explicit **Pin task property IDs** action reads the Notion data-source schema and persists `taskPropertyBindings` beside the original `alf-mapping-v2` configuration. Each binding contains `{sourceId, input, id}` and is valid only for its original data source and configured input. Preview/import and opt-in Actual Time PATCH resolve page properties and updates by ID. Missing IDs or incompatible types fail closed; a same-name replacement is never silently adopted. Changing the input label invalidates the old binding until a new explicit pin.
+
+No Notion property is created or renamed by this action. Habit definition/occurrence property pinning, true sync, and accurate historical Pomodoro session data remain future work.
