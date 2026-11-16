@@ -119,8 +119,9 @@ code {font:inherit;white-space:nowrap}
 (function () {
   'use strict';
   var CFG_KEY = 'alf-mapping-v2';
-  var LINK_KEY = 'alf-task-links-v1';
+  var LINK_PREFIX = 'alf-page-link-';
   var lastVisibleRows = [];
+  var lastPreviewConfig = null;
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
@@ -264,6 +265,9 @@ code {font:inherit;white-space:nowrap}
   async function preview() {
     if (active) return;
     busy(true);
+    lastPreviewConfig = null;
+    lastVisibleRows = [];
+    ui('results').replaceChildren();
     try {
       var c = getForm();
       var id = dataSourceId(c.taskSource,false);
@@ -294,6 +298,7 @@ code {font:inherit;white-space:nowrap}
       var tbody=ui('results');
       tbody.replaceChildren();
       lastVisibleRows = rows.slice(0,75);
+      lastPreviewConfig = JSON.stringify(c);
       lastVisibleRows.forEach(function(page){
         var p=page.properties||{}, tr=document.createElement('tr');
         var selection=document.createElement('td'),checkbox=document.createElement('input');
@@ -388,6 +393,8 @@ code {font:inherit;white-space:nowrap}
       var config=getForm();
       if (!config.taskSource || !config.titleProp || !config.typeProp)
         throw new Error('Configure and preview a Notion task source first');
+      if (!lastPreviewConfig || JSON.stringify(config)!==lastPreviewConfig)
+        throw new Error('Refresh read-only preview after changing any mapping before import');
       var selected=getSelectedPages();
       if (!selected.length) throw new Error('Select at least one Notion task row to import');
       var allowed=String(config.typeValues||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
@@ -398,29 +405,44 @@ code {font:inherit;white-space:nowrap}
       var existing=await PluginAPI.getTasks();
       var archived=await PluginAPI.getArchivedTasks();
       var allTasks=[].concat(existing||[],archived||[]);
-      var raw=await PluginAPI.loadSyncedData(LINK_KEY);
-      var links=raw ? JSON.parse(raw) : {};
-      if (!links || typeof links!=='object' || Array.isArray(links)) throw new Error('Invalid existing task link index');
+      // One independent synced key per Notion page prevents unrelated link
+      // records from overwriting one another on different SuperSync devices.
+      var links=Object.create(null);
+      async function readLink(notionId) {
+        if (Object.prototype.hasOwnProperty.call(links,notionId)) return links[notionId];
+        var raw=await PluginAPI.loadSyncedData(LINK_PREFIX+notionId);
+        var entry=raw ? JSON.parse(raw) : null;
+        if (entry && (entry.notionId!==notionId || typeof entry.spId!=='string'))
+          throw new Error('Corrupt stored Notion task link');
+        links[notionId]=entry ? entry.spId : '';
+        return links[notionId];
+      }
+      async function writeLink(notionId,spId) {
+        await PluginAPI.persistDataSynced(
+          JSON.stringify({version:1,notionId:notionId,spId:spId}),LINK_PREFIX+notionId
+        );
+        links[notionId]=spId;
+      }
       var stats={created:0,skipped:0,failed:0,errors:[]};
       var ordered=importOrder(entries,config);
       for (var page of ordered) {
         try {
           var props=page.properties||{},id=page.id;
           var marker=notionPageMarker(id);
-          var link=links[id];
+          var link=await readLink(id);
           var found=allTasks.find(function(t){return t.id===link ||
             (typeof t.notes==='string' && t.notes.includes(marker));});
           if (found) {
             if (!link) {
-              links[id]=found.id;
-              await PluginAPI.persistDataSynced(JSON.stringify(links),LINK_KEY);
+              await writeLink(id,found.id);
             }
             stats.skipped++;
             continue;
           }
           if (link) {stats.skipped++;stats.errors.push('Existing task link points to missing SP task: '+id);continue;}
           var parent=relationId(page,config.parentProp);
-          if (parent && !links[parent]) {
+          var parentSpId=parent ? await readLink(parent) : '';
+          if (parent && !parentSpId) {
             stats.skipped++;
             stats.errors.push('Skipped subtask: import its parent bundle first ('+id+')');
             continue;
@@ -434,14 +456,17 @@ code {font:inherit;white-space:nowrap}
             title:title,projectId:projectId,notes:marker,
             isIgnoreShortSyntax:true
           };
-          if (parent) payload.parentId=links[parent];
+          if (parent) {
+            var spParent=allTasks.find(function(t){return t.id===parentSpId;});
+            if (spParent && spParent.parentId) throw new Error('SP supports only one subtask level');
+            payload.parentId=parentSpId;
+          }
           if (typeof estimate==='number') payload.timeEstimate=estimate;
           if (due.dueDay) payload.dueDay=due.dueDay;
           // All item creation is explicitly local; no Notion API updates.
           var spId=await PluginAPI.addTask(payload);
           // Persist ID immediately after creation for crash-safe retry.
-          links[id]=spId;
-          await PluginAPI.persistDataSynced(JSON.stringify(links),LINK_KEY);
+          await writeLink(id,spId);
           allTasks.push({id:spId,notes:marker,title:title});
           var updates={};
           if (due.dueWithTime!==undefined) updates.dueWithTime=due.dueWithTime;
