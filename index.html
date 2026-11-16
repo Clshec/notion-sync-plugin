@@ -155,6 +155,37 @@ code {font:inherit;white-space:nowrap}
   <p id="habitReport" role="status" aria-live="polite" class="muted"></p>
   <div class="actions"><button id="saveHabitMappings">Save habit ID mappings only</button></div>
 </section>
+<section>
+  <h2>8. Existing habit-day occurrences → Notion (manual, opt-in)</h2>
+  <p>Use today's <strong>Super Productivity logical day</strong> and existing Notion habit occurrence pages in your configured task/board source. Alf updates only an existing numeric completion/count property; it never creates daily rows, habit definitions, or databases. Start with test data.</p>
+  <div class="grid">
+    <label>Occurrence item-type property (Select or Multi-select)
+      <input id="habitOccTypeProp" placeholder="e.g. نوع الصفحة"></label>
+    <label>Exact occurrence type value
+      <input id="habitOccTypeValue" placeholder="e.g. عادة"></label>
+    <label>Relation to habit definition (Relation)
+      <input id="habitOccRelationProp" placeholder="e.g. قاعدة العادات"></label>
+    <label>Habit occurrence execution day (Date)
+      <input id="habitOccDayProp" placeholder="e.g. يوم التنفيذ"></label>
+    <label>Existing numeric count/duration property (Number)
+      <input id="habitOccCountProp" placeholder="e.g. Habit Count"></label>
+    <label>Counter unit to write
+      <select id="habitOccUnit">
+        <option value="count">Count — ClickCounter only</option>
+        <option value="minutes">Minutes — StopWatch only</option>
+        <option value="hours">Hours — StopWatch only</option>
+      </select>
+    </label>
+  </div>
+  <div class="actions"><button id="previewHabitDay">Preview today's existing habit-day differences</button></div>
+  <pre id="habitDayPlan" style="white-space:pre-wrap;max-height:260px;overflow:auto"></pre>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeHabitDay" type="checkbox" style="width:auto">
+    <span>I reviewed these exact existing Notion occurrences and authorize only the listed numeric values.</span>
+  </label>
+  <div class="actions"><button id="pushHabitDay">Write reviewed habit-day counts (no new records)</button></div>
+  <p id="habitDayReport" role="status" aria-live="polite" class="muted"></p>
+</section>
 <footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release does not synchronize any changes.</footer>
 </main>
 <script>
@@ -166,11 +197,12 @@ code {font:inherit;white-space:nowrap}
   var lastPreviewConfig = null;
   var stagedTimeChanges = null;
   var habitPreview = null;
+  var stagedHabitDay = null;
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
-    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','habitTitleProp','habitCadenceProp'];
+    'bundleValues','executionProp','deadlineProp','estimateProp','actualProp','statusProp','completedValues','priorityProp','priorityHigh','priorityMedium','priorityLow','projectProp','parentProp','unit','habitTitleProp','habitCadenceProp','habitOccTypeProp','habitOccTypeValue','habitOccRelationProp','habitOccDayProp','habitOccCountProp','habitOccUnit'];
   var FIELDS = {titleProp:['title'],typeProp:['multi_select','select'],executionProp:['date'],
     deadlineProp:['date'],estimateProp:['number'],actualProp:['number'],
     statusProp:['status','select'],priorityProp:['select'],projectProp:['relation'],parentProp:['relation']};
@@ -190,7 +222,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','previewBtn','importBtn','planTimeBtn','pushTimeBtn','previewHabits','saveHabitMappings'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','previewBtn','importBtn','planTimeBtn','pushTimeBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -881,6 +913,163 @@ code {font:inherit;white-space:nowrap}
     finally{busy(false);}
   }
 
+
+  function rawCounterValue(counter,day,unit) {
+    if(!counter || !counter.countOnDay) return null;
+    var n=counter.countOnDay[day];
+    if(typeof n!=='number'||!Number.isFinite(n)||n<=0) return null;
+    if(unit==='count' && counter.type==='ClickCounter')return n;
+    if(counter.type!=='StopWatch'||!['minutes','hours'].includes(unit))return null;
+    return Math.round((n/(unit==='minutes'?60000:3600000))*1000000)/1000000;
+  }
+  function habitRelId(p,field) {
+    var rel=p&&p[field]&&p[field].relation;
+    if(!Array.isArray(rel)||rel.length!==1||!rel[0]||!rel[0].id)return null;
+    return rel[0].id;
+  }
+  function occurrenceMatches(page,c,day) {
+    var p=page&&page.properties||{};
+    if(!page||page.object!=='page'||page.in_trash)return false;
+    if(!typeValue(p[c.habitOccTypeProp]).includes(c.habitOccTypeValue))return false;
+    var date=p[c.habitOccDayProp]&&p[c.habitOccDayProp].date;
+    // Strict date-only; a timestamp needs explicit timezone policy before writing.
+    return !!date && typeof date.start==='string' && date.start===day && !date.end;
+  }
+  function validateOccurrenceMapping(schema,c) {
+    var checks=[
+      [c.habitOccTypeProp,['select','multi_select']],
+      [c.habitOccRelationProp,['relation']],
+      [c.habitOccDayProp,['date']],
+      [c.habitOccCountProp,['number']]
+    ];
+    for(var pair of checks) {
+      if(!pair[0]||!schema[pair[0]]||!pair[1].includes(schema[pair[0]].type))
+        throw new Error('Missing or incompatible existing Notion occurrence property: '+pair[0]);
+    }
+    if(!c.habitOccTypeValue) throw new Error('Select the exact Notion habit item type value');
+  }
+  async function stageHabitDay() {
+    if(active)return;
+    busy(true);
+    stagedHabitDay=null;ui('habitDayPlan').textContent='';
+    try {
+      var c=getForm();
+      var sourceId=dataSourceId(c.taskSource,false);
+      if(typeof PluginAPI.getDayContext!=='function')
+        throw new Error('SP logical-day API is unavailable; refuse to use device calendar date');
+      var context=await PluginAPI.getDayContext();
+      var day=context&&context.todayStr;
+      if(!day || !/^\d{4}-\d{2}-\d{2}$/.test(day))
+        throw new Error('Cannot determine SP logical day');
+      var info=await notion('/data_sources/'+encodeURIComponent(sourceId));
+      validateOccurrenceMapping(info.properties||{},c);
+      var kind=(info.properties||{})[c.habitOccTypeProp].type;
+      var typeFilter={property:c.habitOccTypeProp};
+      typeFilter[kind]={};
+      typeFilter[kind][kind==='select'?'equals':'contains']=c.habitOccTypeValue;
+      var filter={and:[typeFilter,{property:c.habitOccDayProp,date:{equals:day}}]};
+      var entries=[],cursor,truncated=false;
+      do {
+        var payload={page_size:Math.min(100,300-entries.length),filter:filter};
+        if(cursor)payload.start_cursor=cursor;
+        var data=await notion('/data_sources/'+encodeURIComponent(sourceId)+'/query','POST',payload);
+        if(!data||!Array.isArray(data.results))throw new Error('Invalid habit occurrence query');
+        entries=entries.concat(data.results);
+        cursor=data.has_more?data.next_cursor:null;
+        if(entries.length>=300){truncated=!!cursor;break;}
+      }while(cursor);
+      if(truncated)throw new Error('More than 300 habit-day candidates; reduce scope before writeback');
+      var state=await PluginAPI.getAppState();
+      var counters=state&&state.simpleCounters||{};
+      var staged=[],notes=[],seen=new Set(),duplicate=new Set();
+      for(var page of entries) {
+        if(!occurrenceMatches(page,c,day))continue;
+        var habitId=habitRelId(page.properties,c.habitOccRelationProp);
+        if(!habitId){notes.push('Missing/ambiguous habit definition relation: '+page.id);continue;}
+        var dedup=normalizedUUID(habitId)+':'+day;
+        if(seen.has(dedup)){duplicate.add(dedup);notes.push('Duplicate existing habit-day row: '+page.id);continue;}
+        seen.add(dedup);
+        var raw=await PluginAPI.loadSyncedData(HABIT_KEY_PREFIX+habitId);
+        var link=raw?JSON.parse(raw):null;
+        if(!link||normalizedUUID(link.notionId)!==normalizedUUID(habitId)||
+            !link.spCounterId||normalizedUUID(link.notionSourceId)!==normalizedUUID(dataSourceId(c.habitSource,false))){
+          notes.push('Unlinked habit definition: '+page.id);continue;
+        }
+        var counter=counters[link.spCounterId];
+        var after=rawCounterValue(counter,day,c.habitOccUnit);
+        if(after===null){notes.push('No positive compatible counter count: '+page.id);continue;}
+        var property=page.properties[c.habitOccCountProp];
+        if(!property||property.type!=='number')
+          throw new Error('Occurrence value is not a Notion Number field');
+        var before=property.number;
+        if(sameNumber(before,after))continue;
+        if(typeof before==='number' && before>after){
+          notes.push('Notion count exceeds SP (stale device risk): '+page.id);continue;
+        }
+        staged.push({
+          pageId:page.id,habitId:habitId,counterId:link.spCounterId,
+          before:before,after:after,day:day,unit:c.habitOccUnit
+        });
+      }
+      // A duplicate habit-day row is not safe: invalidate every candidate
+      // for the same habit and day rather than writing to a random duplicate.
+      staged=staged.filter(function(x){return !duplicate.has(normalizedUUID(x.habitId)+':'+day);});
+      stagedHabitDay={config:JSON.stringify(c),sourceId:sourceId,day:day,updates:staged};
+      ui('habitDayPlan').textContent='Logical day: '+day+'; '+staged.length+' eligible existing occurrence updates (not applied).\n'+
+        staged.map(function(x){return x.pageId+' ('+x.habitId+'): '+x.before+' → '+x.after+' '+x.unit;}).join('\n')+
+        (notes.length?'\nSkipped:\n'+notes.join('\n'):'');
+      message('Read-only habit-day diff complete. No Notion or SP data were modified.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function commitHabitDay() {
+    if(active)return;
+    busy(true);
+    try {
+      if(!ui('authorizeHabitDay').checked)
+        throw new Error('Review and explicitly authorize the existing habit-day updates first');
+      var c=getForm(),plan=stagedHabitDay;
+      if(!plan||!plan.updates.length)throw new Error('No staged habit-day updates; run preview first');
+      if(plan.config!==JSON.stringify(c)||plan.sourceId!==dataSourceId(c.taskSource,false))
+        throw new Error('Habit mapping changed; restage changes');
+      var ctx=await PluginAPI.getDayContext();
+      if(!ctx||ctx.todayStr!==plan.day)
+        throw new Error('SP logical day changed; restage before any writes');
+      var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
+      var done=0,skipped=0,issues=[];
+      for(var e of plan.updates) {
+        try {
+          if(!sameNumber(rawCounterValue(counters[e.counterId],e.day,e.unit),e.after)){
+            skipped++;issues.push('SP counter changed since preview: '+e.pageId);continue;
+          }
+          var page=await notion('/pages/'+encodeURIComponent(e.pageId));
+          if(!page||page.object!=='page'||page.in_trash||
+             normalizedUUID(page.parent&&page.parent.data_source_id)!==plan.sourceId||
+             !occurrenceMatches(page,c,e.day)||
+             normalizedUUID(habitRelId(page.properties,c.habitOccRelationProp))!==normalizedUUID(e.habitId)){
+            skipped++;issues.push('Notion page moved/type/date/relation changed: '+e.pageId);continue;
+          }
+          var prop=page.properties[c.habitOccCountProp];
+          if(!prop||prop.type!=='number'||!sameNumber(prop.number,e.before)){
+            skipped++;issues.push('Notion daily count changed since preview: '+e.pageId);continue;
+          }
+          var patch={properties:{}};
+          patch.properties[c.habitOccCountProp]={number:e.after};
+          var response=await notion('/pages/'+encodeURIComponent(e.pageId),'PATCH',patch);
+          if(!response||response.object!=='page'||response.id!==e.pageId)
+            throw new Error('Notion update not confirmed; re-preview to reconcile');
+          done++;
+        }catch(ex){skipped++;issues.push(e.pageId+': '+String(ex&&ex.message||ex).slice(0,130));}
+      }
+      ui('habitDayReport').textContent=done+' existing habit-day counts updated; '+
+        skipped+' skipped/conflicted. '+issues.slice(0,10).join('; ')+
+        '. No Notion database, page, task, definition or relation created.';
+      stagedHabitDay=null;ui('authorizeHabitDay').checked=false;
+      ui('habitDayPlan').textContent='Writeback attempted. Run a fresh preview before any retry.';
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
   async function init() {
     try {
       var saved=await PluginAPI.loadSyncedData(CFG_KEY);
@@ -902,6 +1091,8 @@ code {font:inherit;white-space:nowrap}
     ui('loadSessions').addEventListener('click',showFocusSessions);
     ui('previewHabits').addEventListener('click',previewHabitDefinitions);
     ui('saveHabitMappings').addEventListener('click',saveHabitMappings);
+    ui('previewHabitDay').addEventListener('click',stageHabitDay);
+    ui('pushHabitDay').addEventListener('click',commitHabitDay);
     try {
       var projects=await PluginAPI.getAllProjects();
       var selector=ui('targetSpProject');
