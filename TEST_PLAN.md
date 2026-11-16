@@ -1,4 +1,4 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.21 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.28 experimental)
 
 **Scope:** Notion is the authoritative planner and long-term habit record. Super Productivity (SP) v20.0.0+ is the local-first task executor, time tracker and focus timer. No requirement to create, migrate, rename or extend the user's existing Notion databases or fields. Use **existing** Notion task and habit data sources. No automatically created Notion pages or properties. The original repository's v14-era legacy test plan and hard-coded database IDs have been retired.
 
@@ -8,11 +8,19 @@
 |---|---|---|---|
 | L1 | Node.js synthetic mocked Notion/SP API | Contract/regression tests; no real user data | CI active |
 | L2 | SP v20.0.0 executable with a **disposable** `--user-data-dir` | Verify safe isolated host startup | **Passed** on connected Windows PC; test profile deleted |
-| L3 | SP v20.0.0 disposable profile + real plugin ZIP | Install/activate and open iframe UI; host hooks and API side effects require follow-up verification | **Partially passed**: actual ZIP installed and Notion sidebar opened; no token or network verification |
+| L3 | SP v20.0.0 disposable profile + real plugin ZIP | Install/activate and open iframe UI; host hooks and API side effects require follow-up verification | **Partially passed**: v0.28.0 installed, enabled and its new section 8c opened; no token or network verification |
 | L4 | Disposable Notion integration and existing disposable data-source rows | Real Notion schema/GET/PATCH/mapping/permissions, test restore | **Not tested** |
 | L5 | Android + Windows, SuperSync Beta, foreground/background/offline | Concurrency, mobile timers and per-device secrets | **Not tested** |
 
 Passing L1–L3 (including this partial isolated Windows install smoke) **does not** imply production readiness or historical completed-Pomodoro accuracy. Never connect a production Notion token or the user's original SP profile until L3–L5 pass. Do not provide or log real Notion tokens.
+
+### v0.28.0 actual Windows host smoke — 2026-11-16
+
+- Verified the installed Super Productivity executable reports **20.0.0**. Launched a **separate, disposable** Electron process with an isolated `--user-data-dir` and confirmed its blank profile, not the ordinary SP profile.
+- Packaged a **temporary local ZIP** containing only root `manifest.json`, `plugin.js`, `index.html`, `notion.svg` and `LICENSE`. Installed it via the real SP Settings → Plugins → Choose Plugin File flow. The host displayed the success notification **Plugin "Alf Notion Super Productivity" installed**. The uploaded plugin listed **v0.28.0**, original author credit, icon, 15 permissions and 2 hooks.
+- Enabled it, clicked its header icon and verified the actual iframe opened. The rendered heading **"8c. Mark an existing daily habit Done — reviewed Status only"** and its explanatory review UI were visible in the real host. An attempted **preview with no saved credential/source** failed closed with **"Data source must be a Notion UUID, not a database URL"**; no Notion writes were attempted.
+- Confirmed all five Electron processes launched under the disposable user-data directory; stopped **only** those processes. Verified no disposable process remained and deleted only its test profile directory and temporary ZIP. The user's normal SP profile, credentials and production data were untouched. No ZIP was published.
+- **Still unverified:** real plugin Notion HTTP GET/PATCH against disposable data, host hook execution/secret persistence and diagnostics across restart, console/network error inspection, Windows/Android multi-device consistency and Android background behavior. This is stronger L3 UI evidence than v0.23, **not L4 or L5 acceptance**.
 
 ## Read-only preflight (L3)
 
