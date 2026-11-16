@@ -278,7 +278,7 @@ code {font:inherit;white-space:nowrap}
     <button id="disableAutoHabitsBtn">Disable automatic habit-day counts</button>
   </div>
   <p id="autoHabitsStatus" role="status" aria-live="polite" class="muted"></p>
-  <p class="muted"><small>Revocation: Disable on this device to stop its writes. Linked habit approvals are kept as synced metadata, but are never active on a disabled device. To replace an approved habit-counter mapping, disable first and re-preview/approve; an old approval cannot silently migrate to a different counter.</small></p>
+  <p class="muted"><small>Every approval replaces the complete set of permitted habits on THIS device; older synced approval history cannot add them back. Disable clears the local writer flag and this device's grant list. To authorize a different set, preview the current existing day and opt in again; the earlier set will no longer write.</small></p>
 </section>
 <section>
   <h2>9. Automatic synchronization diagnostics (THIS DEVICE)</h2>
