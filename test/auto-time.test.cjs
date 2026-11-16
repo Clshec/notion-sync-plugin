@@ -239,3 +239,18 @@ test('one SP task claiming two original Notion pages cannot export its time twic
   assert.equal(e.requests.filter(x=>x.opts.method==='PATCH').length,0);
   assert.equal(e.props['الوقت الفعلي'].number,2);
 });
+
+test('auto actual-time cannot write to Number field also mapped as observed Pomodoro count',async()=>{
+  const e=fixture();
+  e.c.observedPomoProp='Observed Pomodoros (partial)';
+  e.c.taskPropertyBindings.observedPomoProp={
+    sourceId:SOURCE,input:e.c.observedPomoProp,id:'id-work'
+  };
+  e.store.set('alf-mapping-v2',JSON.stringify(e.c));
+  e.task.timeSpent=10800000;
+  const result=await e.sync.runOnce();
+  assert.equal(result.written,0);
+  assert.equal(result.errors,1);
+  assert.equal(e.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(e.props['الوقت الفعلي'].number,2);
+});

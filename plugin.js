@@ -543,6 +543,10 @@ function alfAutoTimeSpec(c) {
   }
   const typeId=pinned('typeProp'),actualId=pinned('actualProp');
   if(!typeId || !actualId)throw new Error('Pin existing task type and actual-time property IDs');
+  const observedId=c.observedPomoProp&&pinned('observedPomoProp');
+  if(c.observedPomoProp && (c.actualProp===c.observedPomoProp ||
+      (observedId&&observedId===actualId)))
+    throw new Error('Actual tracked time and observed Pomodoro count cannot share a Notion Number property');
   return {sourceId,typeId,actualId,unit:c.unit,allowed};
 }
 function alfAutoTimeValue(ms,unit) {
@@ -737,6 +741,13 @@ function alfAutoHabitSpec(c) {
       throw new Error('Stable pinned Notion habit occurrence field required: '+input);
     ids[output]=b.id;
   }
+  const actual=c.taskPropertyBindings&&c.taskPropertyBindings.actualProp;
+  if(c.actualProp &&
+     (c.habitOccCountProp===c.actualProp ||
+      (actual && actual.sourceId===sourceId && actual.input===c.actualProp &&
+       actual.id===ids.countId)) &&
+     (c.habitOccUnit==='count'||c.habitOccUnit!==c.unit))
+    throw new Error('Habit Counter cannot overwrite incompatible work-time Number unit');
   return {sourceId,habitSourceId,ids,
     typeValue:c.habitOccTypeValue,unit:c.habitOccUnit};
 }
