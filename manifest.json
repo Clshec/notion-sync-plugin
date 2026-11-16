@@ -1,10 +1,10 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
-  "description": "Notion-first opt-in automatic planning, tracked time and existing habit-day values; focus history experimental",
+  "description": "Notion-first opt-in planning, actual-time and existing habit-day sync with local diagnostics; focus history experimental",
   "author": "Alf contributors; original Notion Sync Plugin by Alessio Lovato",
   "icon": "notion.svg",
   "iFrame": true,

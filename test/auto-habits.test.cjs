@@ -59,6 +59,7 @@ function fixture(){
     registerHeaderButton(){},registerHook(){},showIndexHtmlAsView(){},
     Hooks:{ACTION:'action',CURRENT_TASK_CHANGE:'currentTaskChange'},
     async getSecret(k){return secrets.get(k)||null;},
+    async setSecret(k,v){secrets.set(k,v);},
     async loadSyncedData(k){return store.get(k)||null;},
     async listSyncedDataKeys(prefix){return [...store.keys()].filter(k=>k.startsWith(prefix));},
     async persistDataSynced(data,key){metadata.push({key,data});store.set(key,data);},
@@ -250,4 +251,23 @@ test('Notion page moved, relation changed, or type changed are never written',as
     assert.equal((await f.engine.runOnce()).written,0);
     assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
   }
+});
+
+
+test('automatic habits report local-only run summary, no synced diagnostics or tokens',async()=>{
+  const f=fixture();
+  await f.engine.heartbeat();
+  const raw=f.secrets.get('alf-auto-status-local-v1-habits');
+  assert.ok(raw);
+  const record=JSON.parse(raw);
+  assert.equal(record.counts.written,1);
+  assert.equal(record.outcome,'ok');
+  assert.equal(record.counts.processed,1);
+  assert.ok(!raw.includes(HABIT)&&!raw.includes('ntn_FAKE_HABIT_TOKEN'));
+  assert.ok(f.metadata.every(x=>x.key!=='alf-auto-status-local-v1-habits'));
+  const d=fixture();
+  d.secrets.delete('alf-auto-habit-local-enabled-v1');
+  await d.engine.heartbeat();
+  assert.equal(d.secrets.has('alf-auto-status-local-v1-habits'),false);
+  assert.equal(d.requests.length,0);
 });

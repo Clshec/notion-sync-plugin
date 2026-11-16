@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.16 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.17 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,14 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.17: per-device synchronization health and immediate-disable safety
+
+A new **Automatic synchronization diagnostics (THIS DEVICE)** section displays the last local check time, whether each of the three automatic paths is currently enabled, and numeric outcome counters (processed/updated/written/anchored/skipped/unchanged/conflicts/errors). Click **Read last local automatic sync checks** to refresh; it makes **no Notion request** and performs **no SP task modification**. The plugin records only aggregated counts, outcome and timestamp in the **per-device local secret store**, never Notion tokens, task titles or page IDs. No diagnostic data is sent to SuperSync, and successful counts **do not imply cross-device sync acknowledgement**. If an engine is off, the last recorded check (if any) is historical; disabled devices make no automatic Notion requests.
+
+Disabling the automatic Notion→SP planning path during an in-progress Notion GET now rechecks the flag immediately before applying the SP update, preventing not-yet-started local writes. Other exported Number paths already recheck the flag before PATCH. Operations that already started remain subject to the platform's normal network/API cancellation limitations.
+
+**Compatibility verification:** The connected Windows PC has Super Productivity **20.0.0** installed but it was not running at inspection; the upstream `v20.0.0` plugin API source includes `getDayContext`, `getAppState`, `listSyncedDataKeys`, `getSecret`, `onReady`, and task update APIs used here. This is *source-level API compatibility*, not a successful real-world plugin install or Windows/Android session/notification test. The underlying app still does not expose the authoritative historical per-task Pomodoro/Flowtime/Countdown ledger through its public plugin API.
 
 ### New v0.16: independently authorized automatic existing habit-day count/duration updates
 

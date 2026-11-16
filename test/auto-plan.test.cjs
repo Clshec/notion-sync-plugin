@@ -74,6 +74,7 @@ function fixture() {
     async listSyncedDataKeys(prefix){return [...stored.keys()].filter(k=>k.startsWith(prefix));},
     async persistDataSynced(json,key){writes.push({key,json});stored.set(key,json);},
     async getSecret(key){return secrets.get(key)||null;},
+    async setSecret(k,v){secrets.set(k,v);},
     async getTasks(){return tasks;},async getArchivedTasks(){return [];},
     async updateTask(id,fields,options){
       assert.ok(options.isIgnoreShortSyntax);
@@ -230,5 +231,41 @@ test('disabled device with token still cannot run automatic Notion planning',asy
   f.pages.get(PAGE).properties['المصدر'].title=[{plain_text:'Changed'}];
   assert.equal((await f.engine.runOnce()).enabled,false);
   assert.equal(f.requests.length,0);
+  assert.equal(f.updates.length,0);
+});
+
+
+test('automatic planning stores only local non-sensitive last-check diagnostics',async()=>{
+  const f=fixture();
+  f.pages.get(PAGE).properties['المصدر'].title=[{plain_text:'Notion changed'}];
+  await f.engine.heartbeat();
+  const raw=f.secrets.get('alf-auto-status-local-v1-planning');
+  assert.ok(raw,'diagnostic summary stored locally on enabled device');
+  const record=JSON.parse(raw);
+  assert.equal(record.version,1);
+  assert.equal(record.outcome,'ok');
+  assert.equal(record.counts.updated,1);
+  assert.equal(record.counts.errors,0);
+  assert.ok(Number.isFinite(record.checkedAt));
+  assert.ok(!raw.includes(PAGE)&&!raw.includes('ntn_LOCAL_ONLY_FAKE_TOKEN'),
+    'No page IDs/tokens are persisted in diagnostics');
+  const d=fixture();
+  d.secrets.delete('alf-auto-plan-local-enabled-v1');
+  await d.engine.heartbeat();
+  assert.equal(d.secrets.has('alf-auto-status-local-v1-planning'),false);
+  assert.equal(d.requests.length,0);
+});
+test('disabling planning during an in-flight Notion GET prevents local SP write',async()=>{
+  const f=fixture();
+  f.pages.get(PAGE).properties['المصدر'].title=[{plain_text:'Notion newer'}];
+  const original=f.api.request;
+  f.api.request=async(url,opts)=>{
+    const result=await original(url,opts);
+    if(url.includes('/pages/'))f.secrets.delete('alf-auto-plan-local-enabled-v1');
+    return result;
+  };
+  const result=await f.engine.runOnce();
+  assert.equal(result.updated,0);
+  assert.equal(result.conflicts,1);
   assert.equal(f.updates.length,0);
 });

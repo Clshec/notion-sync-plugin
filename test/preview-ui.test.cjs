@@ -1445,3 +1445,28 @@ test('habit auto enable refuses changed mapping since reviewed habit-day page qu
   assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
   assert.match(env.els('notice').textContent,/Preview current existing habit-day rows/);
 });
+
+
+test('automatic synchronization diagnostics read only local flags and last run counters',async()=>{
+  const env=mount();
+  await new Promise(resolve=>setImmediate(resolve));
+  await env.api.setSecret('alf-auto-plan-local-enabled-v1','enabled');
+  await env.api.setSecret('alf-auto-status-local-v1-planning',JSON.stringify({
+    version:1,checkedAt:Date.parse('2026-11-16T18:00:00Z'),
+    outcome:'conflicts',counts:{processed:8,updated:2,conflicts:1,errors:0}
+  }));
+  await env.api.setSecret('alf-auto-status-local-v1-habits',JSON.stringify({
+    version:1,checkedAt:Date.parse('2026-11-16T18:05:00Z'),
+    outcome:'ok',counts:{processed:3,written:2,errors:0}
+  }));
+  await env.els('refreshAutoStatusBtn').events.click();
+  const report=env.els('autoStatusReport').textContent;
+  assert.match(report,/Planning \(Notion → SP\): ENABLED/);
+  assert.match(report,/processed=8/);
+  assert.match(report,/conflicts=1/);
+  assert.match(report,/Actual time \(SP → Notion\): DISABLED/);
+  assert.match(report,/Habits \(SP → Notion\): DISABLED/);
+  assert.match(report,/written=2/);
+  assert.equal(env.requests.length,0,'diagnostic UI never queries or PATCHes Notion');
+  assert.equal(env.updates.length,0,'diagnostics never change SP tasks');
+});

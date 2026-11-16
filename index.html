@@ -279,6 +279,13 @@ code {font:inherit;white-space:nowrap}
   </div>
   <p id="autoHabitsStatus" role="status" aria-live="polite" class="muted"></p>
 </section>
+<section>
+  <h2>9. Automatic synchronization diagnostics (THIS DEVICE)</h2>
+  <p>Read-only local diagnostics for the three optional engines: Notion → SP planning, SP → Notion actual time and SP → existing Notion habit-day counts. These status records contain only time and counters: no Notion token, task names or page IDs. They stay local and are not copied by SuperSync.</p>
+  <div class="actions"><button id="refreshAutoStatusBtn">Read last local automatic sync checks (NO WRITES)</button></div>
+  <pre id="autoStatusReport" style="white-space:pre-wrap;max-height:230px;overflow:auto"></pre>
+  <p class="muted">Successful code execution does not confirm a second device has received SuperSync data. A conflict/error count indicates affected records were skipped, not silently overwritten. Android background sleep and Notion rate limits may mean no recent check at all.</p>
+</section>
 <footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release has manual opt-in writeback only; it does not run automatic synchronization.</footer>
 </main>
 <script>
@@ -301,6 +308,7 @@ code {font:inherit;white-space:nowrap}
   var AUTO_TIME_ENABLED_KEY = 'alf-auto-time-local-enabled-v1';
   var AUTO_TIME_ANCHOR_PREFIX = 'alf-time-anchor-v1-';
   var AUTO_HABIT_ENABLED_KEY = 'alf-auto-habit-local-enabled-v1';
+  var AUTO_STATUS_PREFIX = 'alf-auto-status-local-v1-';
   var lastHabitAutoReview = null;
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
@@ -325,7 +333,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','enableAutoHabitsBtn','disableAutoHabitsBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -2036,6 +2044,44 @@ code {font:inherit;white-space:nowrap}
     finally{busy(false);}
   }
 
+
+  async function refreshAutoDiagnostics() {
+    if(active)return;
+    busy(true);
+    try {
+      var engines=[
+        {name:'Planning (Notion → SP)',flow:'planning',flag:AUTO_PLAN_ENABLED_KEY},
+        {name:'Actual time (SP → Notion)',flow:'time',flag:AUTO_TIME_ENABLED_KEY},
+        {name:'Habits (SP → Notion)',flow:'habits',flag:AUTO_HABIT_ENABLED_KEY}
+      ];
+      var lines=['LOCAL DEVICE ONLY — No Notion or SP task requests were made by this report.'];
+      for(var engine of engines) {
+        var enabled=await PluginAPI.getSecret(engine.flag);
+        var raw=await PluginAPI.getSecret(AUTO_STATUS_PREFIX+engine.flow);
+        var line=engine.name+': '+(enabled==='enabled'?'ENABLED':'DISABLED');
+        if(raw) {
+          try {
+            var record=JSON.parse(raw),counts=record&&record.counts||{};
+            if(record.version===1&&Number.isFinite(record.checkedAt)&&
+                record.checkedAt>1577836800000&&record.checkedAt<4102444800000) {
+              line+='; last attempted '+new Date(record.checkedAt).toLocaleString()+
+                '; outcome '+String(record.outcome||'unknown');
+              line+='; '+Object.keys(counts).filter(function(k){
+                return ['processed','updated','written','anchored','skipped',
+                  'unchanged','conflicts','errors'].includes(k)&&
+                  Number.isSafeInteger(counts[k])&&counts[k]>=0;
+              }).map(function(k){return k+'='+counts[k];}).join(', ');
+            }else line+='; local status unavailable/corrupt';
+          }catch(_){line+='; local status unavailable/corrupt';}
+        }else line+='; no recorded automatic check on this device';
+        lines.push(line);
+      }
+      ui('autoStatusReport').textContent=lines.join('\n');
+      message('Read only the per-device local automatic sync diagnostics. No Notion queries or changes.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
   async function init() {
     try {
       var saved=await PluginAPI.loadSyncedData(CFG_KEY);
@@ -2086,6 +2132,7 @@ code {font:inherit;white-space:nowrap}
     ui('pushHabitDay').addEventListener('click',commitHabitDay);
     ui('enableAutoHabitsBtn').addEventListener('click',enableLocalAutomaticHabits);
     ui('disableAutoHabitsBtn').addEventListener('click',disableLocalAutomaticHabits);
+    ui('refreshAutoStatusBtn').addEventListener('click',refreshAutoDiagnostics);
     try {
       var projects=await PluginAPI.getAllProjects();
       var selector=ui('targetSpProject');
