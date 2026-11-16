@@ -1,0 +1,27 @@
+name: Alf mapping primitives
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feat/alf-notion-foundation
+
+permissions:
+  contents: read
+
+jobs:
+  mapping-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate JavaScript
+        run: |
+          node --check lib/field-mapping.cjs
+          node --check test/field-mapping.test.cjs
+          node --check plugin.js
+      - name: Run mapping tests
+        run: node --test test/field-mapping.test.cjs
