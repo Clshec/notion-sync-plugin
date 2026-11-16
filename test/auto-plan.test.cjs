@@ -269,3 +269,15 @@ test('disabling planning during an in-flight Notion GET prevents local SP write'
   assert.equal(result.conflicts,1);
   assert.equal(f.updates.length,0);
 });
+
+
+test('one SP task claiming two distinct Notion page markers cannot refresh planning',async()=>{
+  const f=fixture();
+  f.tasks[0].notes+=' alf-notion-page-id:ffffffffffffffffffffffffffffffff';
+  f.pages.get(PAGE).properties['المصدر'].title=[{plain_text:'This must never write'}];
+  const result=await f.engine.runOnce();
+  assert.equal(result.updated,0);
+  assert.equal(result.conflicts,1);
+  assert.equal(f.updates.length,0);
+  assert.equal(f.tasks[0].title,'Original task');
+});
