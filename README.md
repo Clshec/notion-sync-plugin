@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.21 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.22 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,10 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.22: missing Notion pagination cursors cannot hide duplicate habit-day rows
+
+The manual and automatic habit-day Notion data-source query loops now **fail closed** if Notion reports `has_more: true` but omits a usable `next_cursor`. Previously, a malformed/incomplete response could silently stop pagination and conceal a duplicate existing habit/day occurrence; this could incorrectly authorize writing a Number to a row that should have been rejected as ambiguous. The plugin now refuses the entire affected preview or automatic cycle without any Notion PATCH. The existing 300-row bound and duplicate-group checks remain in force. Mock tests cover this malformed pagination response for both manual and automatic habit-day routes. No production Notion data was touched. The plugin UI footer was corrected to reflect the three existing opt-in automatic paths, all OFF by default; it no longer incorrectly claims there is no automatic engine.
 
 ### New v0.21: strict original Notion↔SP task identities and updated acceptance plan
 
