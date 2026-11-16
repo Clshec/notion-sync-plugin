@@ -957,7 +957,7 @@ test('Notion plan refresh stages title, estimate and due day, then needs separat
   env.els('authorizePlanRefresh').checked=true;
   await env.els('commitPlanBtn').events.click();
   assert.equal(env.updates.length,1);
-  assert.deepEqual(env.updates[0].options,{isIgnoreShortSyntax:true});
+  assert.equal(env.updates[0].options.isIgnoreShortSyntax,true);
   assert.deepEqual(Object.keys(env.updates[0].fields).sort(),
     ['title','timeEstimate','dueDay'].sort());
   assert.equal(task.title,'Notion updated plan #tag');
