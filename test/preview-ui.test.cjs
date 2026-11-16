@@ -1633,3 +1633,25 @@ test('re-approving habits replaces local device scope instead of accumulating pr
   assert.equal(env.stores.filter(x=>x.key==='alf-auto-habit-local-scope-v1').length,0,
     'per-device scope never goes into SuperSync');
 });
+
+test('same Notion Number cannot represent both tracked work time and observed Pomodoros',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('actualProp').value='الوقت المخطط له';
+  env.els('observedPomoProp').value='الوقت المخطط له';
+  env.els('token').value='ntn_FAKE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  assert.match(env.els('notice').textContent,/Actual Time and observed Pomodoro count cannot map to the same Notion Number property/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+test('ClickCounter preview refuses to use the same existing Number as work-time hours',async()=>{
+  const rows=[habitOccurrence('habit-original-1','habit-occ-1',0)],env=mount(rows);
+  await setupHabitDay(env);
+  env.els('actualProp').value='Habit Count';
+  env.els('unit').value='hours';
+  await env.els('previewHabitDay').events.click();
+  assert.match(env.els('notice').textContent,/Habit count\/duration unit conflicts/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
