@@ -180,7 +180,11 @@ code {font:inherit;white-space:nowrap}
     <label>Habit title property (Title) <input id="habitTitleProp" placeholder="e.g. Habit / العادة"></label>
     <label>Habit cadence property (optional; Select) <input id="habitCadenceProp" placeholder="e.g. Frequency / التكرار"></label>
   </div>
-  <div class="actions"><button id="previewHabits">Preview definitions and SP counters (NO WRITES)</button></div>
+  <div class="actions">
+    <button id="pinHabitProps">Pin existing habit field IDs (definitions + board occurrences)</button>
+    <button id="previewHabits">Preview definitions and SP counters (NO WRITES)</button>
+  </div>
+  <p class="muted"><small>Pin existing Notion property IDs before renaming habit fields. Pins are saved only in Alf's synced mapping metadata, never in Notion. Habit-day numeric writeback now requires the occurrence count field to be pinned.</small></p>
   <div class="table-wrap">
     <table><thead><tr><th>Notion habit definition</th><th>Cadence</th><th>Existing SP counter to link</th><th>Today's local count</th></tr></thead><tbody id="habitRows"></tbody></table>
   </div>
@@ -233,6 +237,7 @@ code {font:inherit;white-space:nowrap}
   var stagedHabitDay = null;
   var stagedObservedPomo = null;
   var taskPropertyBindings = {};
+  var habitPropertyBindings = {definitions:{},occurrences:{}};
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
@@ -257,19 +262,26 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
     INPUTS.forEach(function (id) { c[id] = String(ui(id).value || '').trim(); });
     if (Object.keys(taskPropertyBindings).length)
       c.taskPropertyBindings = JSON.parse(JSON.stringify(taskPropertyBindings));
+    if (Object.keys(habitPropertyBindings.definitions).length || Object.keys(habitPropertyBindings.occurrences).length)
+      c.habitPropertyBindings = JSON.parse(JSON.stringify(habitPropertyBindings));
     return c;
   }
   function putForm(c) {
     INPUTS.forEach(function (id) { if (typeof c[id] === 'string') ui(id).value = c[id]; });
     taskPropertyBindings = c.taskPropertyBindings && typeof c.taskPropertyBindings==='object' ?
       c.taskPropertyBindings : {};
+    var h=c.habitPropertyBindings;
+    habitPropertyBindings = h && typeof h==='object' ?
+      {definitions:h.definitions && typeof h.definitions==='object'?h.definitions:{},
+       occurrences:h.occurrences && typeof h.occurrences==='object'?h.occurrences:{}} :
+      {definitions:{},occurrences:{}};
   }
   function dataSourceId(value, optional) {
     var v = String(value || '').trim();
@@ -1299,6 +1311,94 @@ code {font:inherit;white-space:nowrap}
     finally{busy(false);}
   }
 
+  var HABIT_DEFINITION_FIELDS = {habitTitleProp:['title'],habitCadenceProp:['select','multi_select']};
+  var HABIT_OCCURRENCE_FIELDS = {
+    habitOccTypeProp:['select','multi_select'],habitOccRelationProp:['relation'],
+    habitOccDayProp:['date'],habitOccCountProp:['number']
+  };
+  function habitFieldGroup(key) {
+    if (Object.prototype.hasOwnProperty.call(HABIT_DEFINITION_FIELDS,key)) return 'definitions';
+    if (Object.prototype.hasOwnProperty.call(HABIT_OCCURRENCE_FIELDS,key)) return 'occurrences';
+    throw new Error('Unknown habit property mapping: '+key);
+  }
+  function habitSourceForKey(c,key) {
+    return dataSourceId(c[habitFieldGroup(key)==='definitions'?'habitSource':'taskSource'],true);
+  }
+  function habitPinnedId(c,key) {
+    var group=habitFieldGroup(key),bindings=c.habitPropertyBindings&&c.habitPropertyBindings[group];
+    var b=bindings&&bindings[key];
+    if (!b || b.input!==c[key] || typeof b.id!=='string' || !b.id) return '';
+    if (b.sourceId!==habitSourceForKey(c,key)) return '';
+    return b.id;
+  }
+  function habitSchemaProperty(schema,c,key) {
+    if(!c[key])return null;
+    var stable=habitPinnedId(c,key);
+    if(stable) {
+      var matches=Object.keys(schema).filter(function(name){
+        return schema[name] && schema[name].id===stable;
+      });
+      return matches.length===1?schema[matches[0]]:null;
+    }
+    if(schema[c[key]])return schema[c[key]];
+    var ids=Object.keys(schema).filter(function(name){
+      return schema[name] && schema[name].id===c[key];
+    });
+    return ids.length===1?schema[ids[0]]:null;
+  }
+  function habitPageProperty(page,c,key) {
+    if(!c[key])return null;
+    var props=page&&page.properties||{},stable=habitPinnedId(c,key);
+    if(stable) {
+      var matches=Object.keys(props).filter(function(name) {
+        return props[name] && props[name].id===stable;
+      });
+      return matches.length===1?props[matches[0]]:null;
+    }
+    if(props[c[key]])return props[c[key]];
+    var ids=Object.keys(props).filter(function(name) {
+      return props[name] && props[name].id===c[key];
+    });
+    return ids.length===1?props[ids[0]]:null;
+  }
+  function habitWriteKey(c,key) {return habitPinnedId(c,key)||c[key];}
+  async function pinHabitPropertyIds() {
+    if(active)return;
+    busy(true);
+    try {
+      var c=getForm(),next={definitions:{},occurrences:{}},count=0;
+      var groups=[
+        {name:'definitions',source:'habitSource',fields:HABIT_DEFINITION_FIELDS},
+        {name:'occurrences',source:'taskSource',fields:HABIT_OCCURRENCE_FIELDS}
+      ];
+      for(var group of groups) {
+        var selected=Object.keys(group.fields).filter(function(key){return !!c[key];});
+        if(!selected.length)continue;
+        var id=dataSourceId(c[group.source],false);
+        var source=await notion('/data_sources/'+encodeURIComponent(id));
+        var schema=source.properties||{};
+        for(var key of selected) {
+          var property=habitSchemaProperty(schema,c,key);
+          if(!property || !group.fields[key].includes(property.type))
+            throw new Error('Missing/incompatible habit property: '+key);
+          if(typeof property.id!=='string' || !property.id)
+            throw new Error('Notion did not provide an ID for habit property: '+key);
+          next[group.name][key]={sourceId:id,input:c[key],id:property.id};
+          count++;
+        }
+      }
+      if(!count)throw new Error('Map at least one existing habit property before pinning');
+      var saved=Object.assign({},c,{habitPropertyBindings:next});
+      await PluginAPI.persistDataSynced(JSON.stringify(saved),CFG_KEY);
+      habitPropertyBindings=next;
+      habitPreview=null;stagedHabitDay=null;
+      ui('authorizeHabitDay').checked=false;
+      ui('habitDayPlan').textContent='';
+      message('Pinned '+count+' existing habit field IDs in plugin mapping only. No Notion record, property or database changed. Re-preview habits.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+
   var HABIT_KEY_PREFIX='alf-habit-definition-link-v1-';
   function habitLocalDay() {
     var d=new Date();
@@ -1318,11 +1418,11 @@ code {font:inherit;white-space:nowrap}
       var id=dataSourceId(c.habitSource,false);
       if (!c.habitTitleProp) throw new Error('Select an existing habit title property');
       var source=await notion('/data_sources/'+encodeURIComponent(id));
-      var props=source.properties||{}, titleField=props[c.habitTitleProp];
+      var props=source.properties||{}, titleField=habitSchemaProperty(props,c,'habitTitleProp');
       if (!titleField || titleField.type!=='title')
         throw new Error('Habit definition title field is missing or is not Title');
-      if (c.habitCadenceProp && (!props[c.habitCadenceProp] ||
-          !['select','multi_select'].includes(props[c.habitCadenceProp].type))) {
+      if (c.habitCadenceProp && (!habitSchemaProperty(props,c,'habitCadenceProp') ||
+          !['select','multi_select'].includes(habitSchemaProperty(props,c,'habitCadenceProp').type))) {
         throw new Error('Habit cadence must be an existing Select/Multi-select property');
       }
       if (typeof PluginAPI.getAppState!=='function')
@@ -1343,8 +1443,8 @@ code {font:inherit;white-space:nowrap}
       var today=habitLocalDay();
       for(var habit of habits.slice(0,75)) {
         var row=document.createElement('tr'), p=habit.properties||{};
-        appendCell(row,textValue(p[c.habitTitleProp]));
-        var cd=p[c.habitCadenceProp];
+        appendCell(row,textValue(habitPageProperty(habit,c,'habitTitleProp')));
+        var cd=habitPageProperty(habit,c,'habitCadenceProp');
         appendCell(row,cd&&cd.select?cd.select.name:
           cd&&Array.isArray(cd.multi_select)?cd.multi_select.map(function(x){return x.name;}).join(', '):'');
         var holder=document.createElement('td'),select=document.createElement('select');
@@ -1429,29 +1529,28 @@ code {font:inherit;white-space:nowrap}
     if(counter.type!=='StopWatch'||!['minutes','hours'].includes(unit))return null;
     return Math.round((n/(unit==='minutes'?60000:3600000))*1000000)/1000000;
   }
-  function habitRelId(p,field) {
-    var rel=p&&p[field]&&p[field].relation;
+  function habitRelId(page,c) {
+    var field=habitPageProperty(page,c,'habitOccRelationProp');
+    var rel=field&&field.relation;
     if(!Array.isArray(rel)||rel.length!==1||!rel[0]||!rel[0].id)return null;
     return rel[0].id;
   }
   function occurrenceMatches(page,c,day) {
     var p=page&&page.properties||{};
     if(!page||page.object!=='page'||page.in_trash)return false;
-    if(!typeValue(p[c.habitOccTypeProp]).includes(c.habitOccTypeValue))return false;
-    var date=p[c.habitOccDayProp]&&p[c.habitOccDayProp].date;
+    if(!typeValue(habitPageProperty(page,c,'habitOccTypeProp')).includes(c.habitOccTypeValue))return false;
+    var dayProp=habitPageProperty(page,c,'habitOccDayProp');
+    var date=dayProp&&dayProp.date;
     // Strict date-only; a timestamp needs explicit timezone policy before writing.
     return !!date && typeof date.start==='string' && date.start===day && !date.end;
   }
   function validateOccurrenceMapping(schema,c) {
-    var checks=[
-      [c.habitOccTypeProp,['select','multi_select']],
-      [c.habitOccRelationProp,['relation']],
-      [c.habitOccDayProp,['date']],
-      [c.habitOccCountProp,['number']]
-    ];
-    for(var pair of checks) {
-      if(!pair[0]||!schema[pair[0]]||!pair[1].includes(schema[pair[0]].type))
-        throw new Error('Missing or incompatible existing Notion occurrence property: '+pair[0]);
+    for(var key of Object.keys(HABIT_OCCURRENCE_FIELDS)) {
+      var prop=habitSchemaProperty(schema,c,key);
+      if(!prop || !HABIT_OCCURRENCE_FIELDS[key].includes(prop.type))
+        throw new Error('Missing or incompatible existing Notion occurrence property: '+key);
+      if(!habitPinnedId(c,key))
+        throw new Error('Pin stable occurrence property IDs before habit-day writeback: '+key);
     }
     if(!c.habitOccTypeValue) throw new Error('Select the exact Notion habit item type value');
   }
@@ -1470,11 +1569,11 @@ code {font:inherit;white-space:nowrap}
         throw new Error('Cannot determine SP logical day');
       var info=await notion('/data_sources/'+encodeURIComponent(sourceId));
       validateOccurrenceMapping(info.properties||{},c);
-      var kind=(info.properties||{})[c.habitOccTypeProp].type;
-      var typeFilter={property:c.habitOccTypeProp};
+      var kind=habitSchemaProperty(info.properties||{},c,'habitOccTypeProp').type;
+      var typeFilter={property:habitWriteKey(c,'habitOccTypeProp')};
       typeFilter[kind]={};
       typeFilter[kind][kind==='select'?'equals':'contains']=c.habitOccTypeValue;
-      var filter={and:[typeFilter,{property:c.habitOccDayProp,date:{equals:day}}]};
+      var filter={and:[typeFilter,{property:habitWriteKey(c,'habitOccDayProp'),date:{equals:day}}]};
       var entries=[],cursor,truncated=false;
       do {
         var payload={page_size:Math.min(100,300-entries.length),filter:filter};
@@ -1491,7 +1590,7 @@ code {font:inherit;white-space:nowrap}
       var staged=[],notes=[],seen=new Set(),duplicate=new Set();
       for(var page of entries) {
         if(!occurrenceMatches(page,c,day))continue;
-        var habitId=habitRelId(page.properties,c.habitOccRelationProp);
+        var habitId=habitRelId(page,c);
         if(!habitId){notes.push('Missing/ambiguous habit definition relation: '+page.id);continue;}
         var dedup=normalizedUUID(habitId)+':'+day;
         if(seen.has(dedup)){duplicate.add(dedup);notes.push('Duplicate existing habit-day row: '+page.id);continue;}
@@ -1505,7 +1604,7 @@ code {font:inherit;white-space:nowrap}
         var counter=counters[link.spCounterId];
         var after=rawCounterValue(counter,day,c.habitOccUnit);
         if(after===null){notes.push('No positive compatible counter count: '+page.id);continue;}
-        var property=page.properties[c.habitOccCountProp];
+        var property=habitPageProperty(page,c,'habitOccCountProp');
         if(!property||property.type!=='number')
           throw new Error('Occurrence value is not a Notion Number field');
         var before=property.number;
@@ -1542,10 +1641,19 @@ code {font:inherit;white-space:nowrap}
       var ctx=await PluginAPI.getDayContext();
       if(!ctx||ctx.todayStr!==plan.day)
         throw new Error('SP logical day changed; restage before any writes');
+      var info=await notion('/data_sources/'+encodeURIComponent(plan.sourceId));
+      validateOccurrenceMapping(info.properties||{},c);
       var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
       var done=0,skipped=0,issues=[];
       for(var e of plan.updates) {
         try {
+          var rawLink=await PluginAPI.loadSyncedData(HABIT_KEY_PREFIX+e.habitId);
+          var savedLink=rawLink?JSON.parse(rawLink):null;
+          if(!savedLink || normalizedUUID(savedLink.notionId)!==normalizedUUID(e.habitId) ||
+             savedLink.spCounterId!==e.counterId ||
+             normalizedUUID(savedLink.notionSourceId)!==normalizedUUID(dataSourceId(c.habitSource,false))) {
+            skipped++;issues.push('Habit counter link changed since preview: '+e.pageId);continue;
+          }
           if(!sameNumber(rawCounterValue(counters[e.counterId],e.day,e.unit),e.after)){
             skipped++;issues.push('SP counter changed since preview: '+e.pageId);continue;
           }
@@ -1553,15 +1661,15 @@ code {font:inherit;white-space:nowrap}
           if(!page||page.object!=='page'||page.in_trash||
              normalizedUUID(page.parent&&page.parent.data_source_id)!==plan.sourceId||
              !occurrenceMatches(page,c,e.day)||
-             normalizedUUID(habitRelId(page.properties,c.habitOccRelationProp))!==normalizedUUID(e.habitId)){
+             normalizedUUID(habitRelId(page,c))!==normalizedUUID(e.habitId)){
             skipped++;issues.push('Notion page moved/type/date/relation changed: '+e.pageId);continue;
           }
-          var prop=page.properties[c.habitOccCountProp];
+          var prop=habitPageProperty(page,c,'habitOccCountProp');
           if(!prop||prop.type!=='number'||!sameNumber(prop.number,e.before)){
             skipped++;issues.push('Notion daily count changed since preview: '+e.pageId);continue;
           }
           var patch={properties:{}};
-          patch.properties[c.habitOccCountProp]={number:e.after};
+          patch.properties[habitWriteKey(c,'habitOccCountProp')]={number:e.after};
           var response=await notion('/pages/'+encodeURIComponent(e.pageId),'PATCH',patch);
           if(!response||response.object!=='page'||response.id!==e.pageId)
             throw new Error('Notion update not confirmed; re-preview to reconcile');
@@ -1602,6 +1710,7 @@ code {font:inherit;white-space:nowrap}
     ui('loadSessions').addEventListener('click',showFocusSessions);
     ui('previewObservedPomoBtn').addEventListener('click',stageObservedPomodoros);
     ui('pushObservedPomoBtn').addEventListener('click',commitObservedPomodoros);
+    ui('pinHabitProps').addEventListener('click',pinHabitPropertyIds);
     ui('previewHabits').addEventListener('click',previewHabitDefinitions);
     ui('saveHabitMappings').addEventListener('click',saveHabitMappings);
     ui('previewHabitDay').addEventListener('click',stageHabitDay);
