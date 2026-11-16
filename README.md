@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity
 
-**Status: v0.10 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
+**Status: v0.11 experimental Notion preview, manual task import, observed focus sessions, and explicitly approved writeback of SP tracked work and existing habit-day values. Not yet a bidirectional synchronization plugin. Do not connect production data until tested on a disposable Notion integration and Super Productivity profile.** This is a public, MIT-licensed fork of [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), originally written by **Alessio Lovato**. The MIT copyright and LICENSE are preserved.
 
 ## Why this fork exists
 
@@ -29,6 +29,16 @@ The fork now contains **read-only Notion exploration, explicit SP task import, a
 7. To push verified actual **work time** from SP back to Notion, map an existing Notion Actual Time Number property, select the already linked tasks in the preview, click **Preview actual time differences**, inspect the exact old/new values, tick the separate writeback authorization box, and click **Write reviewed actual time to Notion**. The only Notion mutation is a PATCH of the configured Number property after fresh source/type/value checks. Never infer completed Pomodoros from this aggregate.
 
 Token is stored via `PluginAPI.setSecret` on the device, not in `persistDataSynced`, and never exported from the UI; SP's local plugin secret storage is **not hardware-encrypted**. Nonsecret field/source mapping uses a **keyed synced entry**. The module uses the SP guarded HTTP bridge and pins `api.notion.com` as its only allowed host. Tested with mocked PluginAPI; **real Android/Desktop runtime integration is still pending**.
+
+### New v0.11: Notion planning refresh on existing Super Productivity tasks (manual)
+
+This release advances the Notion-first workflow: Notion remains the planning source and Super Productivity remains the local execution/timer app. After importing a task once, future title, planned work estimate, and execution date changes in the **same existing Notion board** can be reviewed and applied to that **existing linked SP task**, without deleting or recreating tasks. This also updates the SP estimate from which the current Pomodoro target can be calculated. No new Notion database, property, task or habit is created.
+
+Workflow: preview Notion tasks → check the intended rows → **Review Notion planning differences** → inspect each field's old/new value → separately check the authorization box → **Update reviewed SP plans**. The action changes only the official SP task fields `title`, `timeEstimate`, `dueDay` and/or `dueWithTime`. A title containing `#tag`, `@date` or other short syntax is preserved verbatim. `timeSpent`, `isDone`, tags, notes, `projectId`, subtasks, and habit counters are never sent in update payloads. Blank Notion dates or estimates are not treated as requests to clear existing SP values.
+
+An entry is eligible only if its original Notion page ID matches an exact task marker and the independent persisted link, it is an active **not archived, unfinished, non-recurring** SP task, and Notion's item type remains explicitly allowed. Before any update the plugin re-fetches Notion's source schema and page, checks the page still belongs to the configured source and has the identical reviewed plan, rechecks local SP field values, project and parent task ID, and skips stale or ambiguous items. No action runs automatically, so it cannot race SuperSync in response to every remote change. The source is **Notion → SP planning only**; SP → Notion work tracking/partial observed Pomodoros and habits remain separate, explicitly reviewed actions.
+
+Limits: This is an experimental **manual sync step**, not a background bidirectional engine. It does not synchronize Notion status, project hierarchy, bulk task deletion, blank-field clearing or full focus sessions. There is no atomic transaction between Notion's GET and SP's update; production rollout needs sandbox tests on Windows and Android, error recovery, and offline/duplicate-device orchestration. Nothing touches users' real Notion data from repository CI.
 
 ### New v0.10: explicit manual export of an observed Pomodoro *lower bound*
 
