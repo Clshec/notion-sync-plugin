@@ -119,6 +119,22 @@ code {font:inherit;white-space:nowrap}
   <div class="actions"><button id="importBtn">Import checked tasks to SP (NO NOTION WRITES)</button></div>
   <p id="importReport" role="status" aria-live="polite" class="muted"></p>
 </section>
+<section>
+  <h2>5. Optional actual work time → existing Notion tasks</h2>
+  <p>This writeback changes <strong>only the mapped Actual Time Number property</strong> on each selected and linked Notion task. The original plan, deadline, status, task title, and relations remain unchanged. Parent task aggregates are skipped to prevent duplicate counting. No Pomodoro completion count is inferred from tracked time.</p>
+  <div class="actions">
+    <button id="planTimeBtn">Preview actual time differences (NO WRITES)</button>
+  </div>
+  <pre id="timePlan" style="white-space:pre-wrap;overflow:auto;max-height:240px"></pre>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeTime" type="checkbox" style="width:auto">
+    <span>I reviewed the exact differences and authorize updating only the selected existing Notion Actual Time properties.</span>
+  </label>
+  <div class="actions">
+    <button id="pushTimeBtn">Write reviewed actual time to Notion</button>
+  </div>
+  <p id="timeReport" role="status" aria-live="polite" class="muted"></p>
+</section>
 <footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release does not synchronize any changes.</footer>
 </main>
 <script>
@@ -128,6 +144,7 @@ code {font:inherit;white-space:nowrap}
   var LINK_PREFIX = 'alf-page-link-';
   var lastVisibleRows = [];
   var lastPreviewConfig = null;
+  var stagedTimeChanges = null;
   var TOKEN_KEY = 'alf-notion-token';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
@@ -152,7 +169,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','previewBtn','importBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','previewBtn','importBtn','planTimeBtn','pushTimeBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -273,6 +290,8 @@ code {font:inherit;white-space:nowrap}
     busy(true);
     lastPreviewConfig = null;
     lastVisibleRows = [];
+    stagedTimeChanges = null;
+    ui('timePlan').textContent = '';
     ui('results').replaceChildren();
     try {
       var c = getForm();
@@ -518,6 +537,152 @@ code {font:inherit;white-space:nowrap}
     finally {busy(false);}
   }
 
+
+  function normalizedUUID(text) {
+    return String(text||'').replace(/-/g,'').toLowerCase();
+  }
+  function sameNumber(a,b) {
+    if (a===b) return true;
+    return typeof a==='number' && typeof b==='number' &&
+      Number.isFinite(a) && Number.isFinite(b) && Math.abs(a-b)<0.000001;
+  }
+  function notionTimeNumber(page,propertyName) {
+    var field=(page.properties||{})[propertyName];
+    if (!field || field.type!=='number') throw new Error('Actual time field is not a Number');
+    return field.number===null ? null : field.number;
+  }
+  async function findLinkedSpTask(pageId,allTasks) {
+    var marker=notionPageMarker(pageId);
+    var raw=await PluginAPI.loadSyncedData(LINK_PREFIX+pageId);
+    var link=raw ? JSON.parse(raw) : null;
+    if (link && (link.notionId!==pageId || typeof link.spId!=='string'))
+      throw new Error('Corrupted task mapping; time update refused');
+    var matched=allTasks.filter(function(task){
+      return task && typeof task.notes==='string' && task.notes.includes(marker);
+    });
+    if (matched.length>1) throw new Error('Multiple SP tasks claim the same Notion page');
+    var task=matched[0] || null;
+    if (link && task && task.id!==link.spId) throw new Error('SP task identity conflict');
+    if (link && !task) throw new Error('Stored task link exists but matching SP task marker is missing');
+    // Unlinked Notion pages are not matched by title because titles are not unique IDs.
+    return task;
+  }
+  function plannedNumber(ms,unit) {
+    if (typeof ms!=='number' || !Number.isFinite(ms) || ms<=0) return null;
+    return Math.round((ms/(unit==='minutes'?60000:3600000))*1000000)/1000000;
+  }
+  async function stageActualTime() {
+    if (active) return;
+    busy(true);
+    stagedTimeChanges = null;
+    try {
+      var c=getForm();
+      if (!lastPreviewConfig || JSON.stringify(c)!==lastPreviewConfig)
+        throw new Error('Refresh task preview before staging actual time');
+      if (!c.actualProp) throw new Error('Map an existing Notion Actual Time Number property');
+      var selected=getSelectedPages();
+      if (!selected.length) throw new Error('Select at least one task row to review');
+      // Revalidate existing schema; do not create an Actual Time property automatically.
+      var id=dataSourceId(c.taskSource,false);
+      var source=await notion('/data_sources/'+encodeURIComponent(id));
+      var field=(source.properties||{})[c.actualProp];
+      if (!field || field.type!=='number') throw new Error('Actual Time property is missing or is not Number');
+      var tasks=[].concat(await PluginAPI.getTasks()||[],await PluginAPI.getArchivedTasks()||[]);
+      var approved=[],notes=[];
+      for (var page of selected) {
+        try {
+          var task=await findLinkedSpTask(page.id,tasks);
+          if (!task) {notes.push('Unlinked: '+page.id);continue;}
+          if (Array.isArray(task.subTaskIds) && task.subTaskIds.length>0) {
+            notes.push('Skipped parent total (rollup safety): '+page.id);continue;
+          }
+          var tracked=plannedNumber(task.timeSpent,c.unit);
+          if (tracked===null) {notes.push('No positive tracked time yet: '+page.id);continue;}
+          var before=notionTimeNumber(page,c.actualProp);
+          if (sameNumber(before,tracked)) continue;
+          if (typeof before==='number' && before>tracked) {
+            notes.push('Notion exceeds local SP time (stale device risk): '+page.id);continue;
+          }
+          approved.push({notionId:page.id,spId:task.id,before:before,after:tracked,
+            title:textValue((page.properties||{})[c.titleProp])});
+        } catch(e) {notes.push(page.id+': '+String(e&&e.message||e).slice(0,120));}
+      }
+      stagedTimeChanges={sourceId:id,mapping:JSON.stringify(c),
+        ids:selected.map(function(p){return p.id;}).sort().join(','),
+        updates:approved};
+      var summary=approved.map(function(entry){
+        return entry.title+' ['+entry.notionId+']: '+entry.before+' → '+entry.after+' '+c.unit;
+      });
+      ui('timePlan').textContent=approved.length+' eligible time updates (not applied)\n'+
+        summary.join('\n')+(notes.length?'\n\nSkipped/warnings:\n'+notes.join('\n'):'');
+      message('Writeback staged in memory only. Review values and check the separate authorization box before any Notion write.');
+    } catch(e) {fail(e);}
+    finally {busy(false);}
+  }
+  async function commitActualTime() {
+    if (active) return;
+    busy(true);
+    try {
+      if (!ui('authorizeTime').checked) throw new Error('Review differences and authorize Notion time writes explicitly');
+      var c=getForm(),plan=stagedTimeChanges;
+      if (!plan || !plan.updates.length) throw new Error('Stage at least one positive actual-time update first');
+      var id=dataSourceId(c.taskSource,false);
+      if (id!==plan.sourceId || JSON.stringify(c)!==plan.mapping || plan.mapping!==lastPreviewConfig)
+        throw new Error('Mapping changed. Re-run task and time previews');
+      var selectedIds=getSelectedPages().map(function(p){return p.id;}).sort().join(',');
+      if (selectedIds!==plan.ids) throw new Error('Selection changed after review: restage exact updates');
+      var local=[].concat(await PluginAPI.getTasks()||[],await PluginAPI.getArchivedTasks()||[]);
+      var stats={written:0,skipped:0,errors:[]};
+      for (var entry of plan.updates) {
+        try {
+          var matching=await findLinkedSpTask(entry.notionId,local);
+          if (!matching || matching.id!==entry.spId || (matching.subTaskIds||[]).length) {
+            stats.skipped++;stats.errors.push('Link changed: '+entry.notionId);continue;
+          }
+          var nowMs=plannedNumber(matching.timeSpent,c.unit);
+          if (!sameNumber(nowMs,entry.after)) {
+            stats.skipped++;stats.errors.push('SP tracking changed since preview: '+entry.notionId);continue;
+          }
+          // Fresh preflight: page still belongs to this exact configured data source,
+          // is still an allowed type, and its number has not changed in Notion.
+          var page=await notion('/pages/'+encodeURIComponent(entry.notionId));
+          if (!page || page.object!=='page' || page.in_trash ||
+              normalizedUUID(page.parent&&page.parent.data_source_id)!==id) {
+            stats.skipped++;stats.errors.push('Page moved or removed: '+entry.notionId);continue;
+          }
+          var allowed=splitValues(c.typeValues);
+          var types=typeValue((page.properties||{})[c.typeProp]);
+          if (!types.some(function(t){return allowed.includes(t);})) {
+            stats.skipped++;stats.errors.push('Notion type no longer allowed: '+entry.notionId);continue;
+          }
+          var current=notionTimeNumber(page,c.actualProp);
+          if (!sameNumber(current,entry.before)) {
+            stats.skipped++;stats.errors.push('Notion time changed since preview: '+entry.notionId);continue;
+          }
+          var patch={properties:{}};
+          patch.properties[c.actualProp]={number:entry.after};
+          var result=await notion('/pages/'+encodeURIComponent(entry.notionId),'PATCH',patch);
+          if (!result || result.object!=='page' || result.id!==entry.notionId)
+            throw new Error('Notion did not confirm page update; re-preview before retrying');
+          stats.written++;
+          var cached=lastVisibleRows.find(function(p){return p.id===entry.notionId;});
+          if (cached && cached.properties && cached.properties[c.actualProp])
+            cached.properties[c.actualProp].number=entry.after;
+        } catch(e) {
+          stats.skipped++;
+          stats.errors.push(entry.notionId+': '+String(e&&e.message||e).slice(0,140));
+        }
+      }
+      ui('timeReport').textContent='Actual time written to '+stats.written+
+        ' existing Notion pages; '+stats.skipped+' skipped/conflicted. '+
+        stats.errors.slice(0,10).join('; ')+'. No other Notion property was written.';
+      ui('authorizeTime').checked=false;
+      stagedTimeChanges=null; // never replay PATCH without a fresh diff preview
+      ui('timePlan').textContent='Writeback attempted. Re-run read-only task preview and time diff before another update.';
+    } catch(e) {fail(e);}
+    finally {busy(false);}
+  }
+
   async function init() {
     try {
       var saved=await PluginAPI.loadSyncedData(CFG_KEY);
@@ -534,6 +699,8 @@ code {font:inherit;white-space:nowrap}
     ui('schemaBtn').addEventListener('click',inspect);
     ui('previewBtn').addEventListener('click',preview);
     ui('importBtn').addEventListener('click',importChecked);
+    ui('planTimeBtn').addEventListener('click',stageActualTime);
+    ui('pushTimeBtn').addEventListener('click',commitActualTime);
     try {
       var projects=await PluginAPI.getAllProjects();
       var selector=ui('targetSpProject');
