@@ -72,7 +72,9 @@ function fixture(){
         assert.equal(fields.length,1,'single existing numeric field only');
         assert.equal(fields[0][0],'id-work','Never patch an unpinned or unrelated property');
         assert.equal(typeof fields[0][1].number,'number');
-        props['الوقت الفعلي'].number=fields[0][1].number;
+        const match=Object.keys(props).find(k=>props[k].id===fields[0][0]);
+        assert.ok(match,'Patch must target a real existing Notion property ID');
+        props[match].number=fields[0][1].number;
         return page;
       }
       throw new Error('Unexpected endpoint');
