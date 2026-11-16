@@ -357,12 +357,17 @@ function alfAutoCurrentPlan(task) {
     timeEstimate:typeof task.timeEstimate === 'number' ? task.timeEstimate : null,
     dueDay:task.dueDay ?? null, dueWithTime:task.dueWithTime ?? null};
 }
+function alfAutoSingleNotionMarker(task,notionId) {
+  if(!task||typeof task.notes!=='string'||typeof notionId!=='string')return false;
+  const markers=task.notes.split(/\s+/).filter(t=>t.startsWith('alf-notion-page-id:'));
+  return markers.length===1&&markers[0]==='alf-notion-page-id:'+notionId;
+}
 function alfAutoTaskMatches(task,anchor) {
   if(!task || task.id !== anchor.spId || task.isDone === true || task.repeatCfgId ||
     (task.projectId ?? null) !== anchor.projectId ||
     (task.parentId ?? null) !== anchor.parentId ||
     typeof task.notes !== 'string') return false;
-  return task.notes.split(/\s+/).includes('alf-notion-page-id:'+anchor.notionId);
+  return alfAutoSingleNotionMarker(task,anchor.notionId);
 }
 function alfCreateAutoPlanSync(api, options) {
   const opts=options || {}, maxBatch=opts.maxBatch || ALF_AUTO_PLAN_TASKS_PER_CYCLE;
@@ -549,7 +554,7 @@ function alfAutoTimeTask(task,anchor) {
      (task.parentId??null)!==anchor.parentId ||
      (Array.isArray(task.subTaskIds)&&task.subTaskIds.length>0) ||
      typeof task.notes!=='string')return false;
-  return task.notes.split(/\s+/).includes('alf-notion-page-id:'+anchor.notionId);
+  return alfAutoSingleNotionMarker(task,anchor.notionId);
 }
 function alfAutoTimePage(page,spec,notionId) {
   if(!page || page.object!=='page' || page.in_trash ||

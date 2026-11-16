@@ -227,3 +227,15 @@ test('unknown time PATCH result cannot trigger duplicate automatic PATCH on retr
     'changed Notion number stops stale baseline rather than replaying');
   assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,1);
 });
+
+
+test('one SP task claiming two original Notion pages cannot export its time twice',async()=>{
+  const e=fixture();
+  e.task.notes+=' alf-notion-page-id:ffffffffffffffffffffffffffffffff';
+  e.task.timeSpent=10800000;
+  const result=await e.sync.runOnce();
+  assert.equal(result.written,0);
+  assert.equal(result.conflicts,1);
+  assert.equal(e.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(e.props['الوقت الفعلي'].number,2);
+});

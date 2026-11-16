@@ -1567,7 +1567,7 @@ test('manual habit-day preview and writeback refuse missing pagination cursor',a
 });
 
 
-test('v0.23 plugin intro discloses three optional automations and never claims all syncing is manual',()=>{
+test('plugin intro discloses three optional automations and never claims all syncing is manual',()=>{
   assert.ok(html.includes('EXPERIMENTAL · AUTO SYNC OFF BY DEFAULT'));
   assert.ok(html.includes('Three narrowly scoped automatic modes are available'));
   assert.ok(html.includes('disabled by default'));
@@ -1575,5 +1575,29 @@ test('v0.23 plugin intro discloses three optional automations and never claims a
   assert.ok(html.includes('No Notion database, property or day-record creation'));
   assert.ok(html.includes('separate device-local opt-in'),
     'footer and intro both state narrowly scoped auto behavior');
-  assert.equal(manifest.version,'0.23.0');
+  assert.match(manifest.version,/^0\.\d+\.\d+$/);
+});
+
+
+test('manual SP planning rejects one task claiming two different Notion pages',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  task.notes+=' alf-notion-page-id:other-independent-page';
+  await env.els('stagePlanBtn').events.click();
+  assert.match(env.els('planRefreshDiff').textContent,/0 linked SP task planning updates/);
+  assert.equal(env.updates.length,0);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+test('manual importer refuses to adopt ambiguous multi-page task markers',async()=>{
+  const rows=[planningTestPage()],env=mount(rows);
+  const task=await setupPlanRefresh(env,rows);
+  task.notes+=' alf-notion-page-id:another-page-id';
+  const linkKey='alf-page-link-'+rows[0].id;
+  await env.api.persistDataSynced('',linkKey);
+  env.els('authorizeImport').checked=true;
+  await env.els('importBtn').events.click();
+  assert.equal(env.imports.length,1,'do not create a duplicate SP task');
+  assert.equal(await env.api.loadSyncedData(linkKey),null,
+    'ambiguous marker cannot be automatically relinked');
+  assert.match(env.els('importReport').textContent,/multiple Notion pages/);
 });
