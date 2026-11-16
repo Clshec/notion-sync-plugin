@@ -54,6 +54,7 @@ function fixture(){
     async listSyncedDataKeys(prefix){return [...store.keys()].filter(k=>k.startsWith(prefix));},
     async persistDataSynced(data,key){writes.push({key,data});store.set(key,data);},
     async getSecret(k){return secrets.get(k)||null;},
+    async setSecret(k,v){secrets.set(k,v);},
     async getTasks(){return [task];},
     async getArchivedTasks(){return [];},
     async request(url,opts){
