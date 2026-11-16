@@ -615,8 +615,12 @@ code {font:inherit;white-space:nowrap}
   }
   // The original page marker must be an exact, complete note token.
   function hasExactNotionMarker(task,pageId) {
-    return !!task && typeof task.notes==='string' &&
-      task.notes.split(/\s+/).includes(notionPageMarker(pageId));
+    if(!task||typeof task.notes!=='string')return false;
+    var tokens=task.notes.split(/\s+/);
+    var markers=tokens.filter(function(t){return t.indexOf('alf-notion-page-id:')===0;});
+    // One SP task cannot be the source of two different Notion pages:
+    // this would duplicate tracked time and observer counts on export.
+    return markers.length===1&&markers[0]===notionPageMarker(pageId);
   }
   function getSelectedPages() {
     var selections=Array.prototype.slice.call(document.querySelectorAll('.rowSelector'));
@@ -739,8 +743,21 @@ code {font:inherit;white-space:nowrap}
           var props=page.properties||{},id=page.id;
           var marker=notionPageMarker(id);
           var link=await readLink(id);
-          var found=allTasks.find(function(t){return t.id===link ||
-            hasExactNotionMarker(t,id);});
+          var claims=allTasks.filter(function(t){
+            return t && typeof t.notes==='string' &&
+              t.notes.split(/\s+/).includes(marker);
+          });
+          if(claims.some(function(t){return !hasExactNotionMarker(t,id);}))
+            throw new Error('SP task claims multiple Notion pages; manual review required');
+          if(claims.length>1)
+            throw new Error('Multiple SP tasks claim the same original Notion page');
+          var byStoredLink=link?allTasks.filter(function(t){return t.id===link;}):[];
+          if(byStoredLink.length>1 || (byStoredLink.length&&claims.length&&
+              byStoredLink[0].id!==claims[0].id))
+            throw new Error('Stored task ID and original Notion page marker conflict');
+          var found=byStoredLink[0] || claims[0] || null;
+          if(found && !hasExactNotionMarker(found,id))
+            throw new Error('SP stored task link has missing/multiple Notion page markers');
           if (found) {
             if (!link) {
               await writeLink(id,found.id);
