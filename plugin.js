@@ -406,10 +406,12 @@ function alfCreateAutoPlanSync(api, options) {
           stats.updated++;
         } else {stats.skipped++;}
         const expected=Object.assign({},current,update);
-        const next=Object.assign({},anchor,{expected});
-        // If SP write succeeded but anchor persistence fails, next cycle
-        // detects a local mismatch and safely refuses replay until re-seeded.
-        await api.persistDataSynced(JSON.stringify(next),key);
+        if(JSON.stringify(expected)!==JSON.stringify(anchor.expected)) {
+          const next=Object.assign({},anchor,{expected});
+          // If SP write succeeded but anchor persistence fails, next cycle
+          // detects a local mismatch and safely refuses replay until re-seeded.
+          await api.persistDataSynced(JSON.stringify(next),key);
+        }
       } catch (_) {stats.errors++;}
     }
     cursor=(cursor+count)%allKeys.length;
