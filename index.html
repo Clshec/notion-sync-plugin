@@ -287,7 +287,7 @@ code {font:inherit;white-space:nowrap}
   <pre id="autoStatusReport" style="white-space:pre-wrap;max-height:230px;overflow:auto"></pre>
   <p class="muted">Successful code execution does not confirm a second device has received SuperSync data. A conflict/error count indicates affected records were skipped, not silently overwritten. Android background sleep and Notion rate limits may mean no recent check at all.</p>
 </section>
-<footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. This release has manual opt-in writeback only; it does not run automatic synchronization.</footer>
+<footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. Three narrowly scoped automatic paths are available with separate device-local opt-in; all are OFF by default and experimental, not complete two-way synchronization.</footer>
 </main>
 <script>
 (function () {
@@ -1868,6 +1868,8 @@ code {font:inherit;white-space:nowrap}
       if(cursor)payload.start_cursor=cursor;
       var data=await notion('/data_sources/'+encodeURIComponent(sourceId)+'/query','POST',payload);
       if(!data||!Array.isArray(data.results))throw new Error('Invalid habit occurrence query');
+      if(data.has_more && (typeof data.next_cursor!=='string'||!data.next_cursor))
+        throw new Error('Incomplete Notion habit-day query: pagination cursor missing');
       entries=entries.concat(data.results);
       cursor=data.has_more?data.next_cursor:null;
       if(entries.length>=300){truncated=!!cursor;break;}

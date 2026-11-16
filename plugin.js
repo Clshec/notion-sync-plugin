@@ -791,6 +791,8 @@ function alfCreateAutoHabitSync(api,options) {
       if(cursor)body.start_cursor=cursor;
       const data=await notion(token,'/data_sources/'+encodeURIComponent(spec.sourceId)+'/query','POST',body);
       if(!data||!Array.isArray(data.results))throw new Error('Invalid Notion habit-day query');
+      if(data.has_more && (typeof data.next_cursor!=='string'||!data.next_cursor))
+        throw new Error('Incomplete Notion habit-day query: has_more without next cursor');
       pages.push(...data.results);
       cursor=data.has_more?data.next_cursor:null;
       if(pages.length>=300){truncated=!!cursor;break;}

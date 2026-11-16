@@ -404,3 +404,20 @@ test('disabling per-habit consent during an in-flight Notion GET blocks PATCH',a
   assert.equal(result.conflicts,1);
   assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
 });
+
+
+test('missing next cursor with has_more true fails closed before automatic habit Number PATCH',async()=>{
+  const f=fixture();
+  const real=f.api.request;
+  f.api.request=async(url,opts)=>{
+    const data=await real(url,opts);
+    if(opts.method==='POST' && url.includes('/query'))
+      return {...data,has_more:true,next_cursor:null};
+    return data;
+  };
+  const result=await f.engine.runOnce();
+  assert.equal(result.written,0);
+  assert.equal(result.errors,1);
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(f.metadata.length,0);
+});
