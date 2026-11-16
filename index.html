@@ -266,18 +266,19 @@ code {font:inherit;white-space:nowrap}
 </section>
 <section>
   <h2>8b. Automatic existing habit-day counts → Notion (EXPERIMENTAL, one device)</h2>
-  <p>This is a separate, OFF-by-default opt-in. Start by linking each existing Notion habit definition to the intended SP SimpleCounter, pinning all four existing board occurrence field IDs, and previewing today's existing habit-day records above. Automatic mode works on <strong>today's SP logical day only</strong> and never creates a Notion page, database, property, definition or SP counter.</p>
+  <p>This is a separate, OFF-by-default opt-in. Link the existing Notion habit definitions to their intended SP SimpleCounters, pin all four existing occurrence IDs, then preview today's existing habit-day records. Automatic writes are allowed <strong>only for individual habit definitions explicitly approved from that preview</strong>, including their future logical days when a corresponding existing Notion occurrence already exists. No new pages, definitions, properties or counters are created.</p>
   <p><strong>Consent policy:</strong> an existing Notion habit-day Number that is blank or zero may be filled from a positive, compatible SP counter on the same day. An already matching positive count may be anchored without a write. A nonzero Notion value that disagrees before any anchor, or any subsequent manual Notion edit or SP counter reset, is a conflict and is skipped. Duplicate habit/day records and ambiguous counter mappings are refused.</p>
   <p class="muted">Automatic Notion Number PATCHes occur without further approval once enabled. Enable only on ONE disposable test device, not production. This isn't a guaranteed Android background service, no new day rows are created, and Notion has no atomic cross-device compare-and-swap.</p>
   <label style="flex-direction:row;align-items:center;margin-top:12px">
     <input id="authorizeAutoHabitsLocal" type="checkbox" style="width:auto">
-    <span>I reviewed today's existing habit-day pages and explicitly enable ongoing monotonic writes to their mapped existing Number fields on this device only.</span>
+    <span>I explicitly approve only the eligible, individually linked habits shown in today's reviewed preview, including their future existing daily occurrences, for monotonic Number writes on THIS device only.</span>
   </label>
   <div class="actions">
     <button id="enableAutoHabitsBtn">Enable automatic existing habit-day counts</button>
     <button id="disableAutoHabitsBtn">Disable automatic habit-day counts</button>
   </div>
   <p id="autoHabitsStatus" role="status" aria-live="polite" class="muted"></p>
+  <p class="muted"><small>Revocation: Disable on this device to stop its writes. Linked habit approvals are kept as synced metadata, but are never active on a disabled device. To replace an approved habit-counter mapping, disable first and re-preview/approve; an old approval cannot silently migrate to a different counter.</small></p>
 </section>
 <section>
   <h2>9. Automatic synchronization diagnostics (THIS DEVICE)</h2>
@@ -308,6 +309,7 @@ code {font:inherit;white-space:nowrap}
   var AUTO_TIME_ENABLED_KEY = 'alf-auto-time-local-enabled-v1';
   var AUTO_TIME_ANCHOR_PREFIX = 'alf-time-anchor-v1-';
   var AUTO_HABIT_ENABLED_KEY = 'alf-auto-habit-local-enabled-v1';
+  var AUTO_HABIT_APPROVAL_PREFIX = 'alf-habit-auto-allow-v1-';
   var AUTO_STATUS_PREFIX = 'alf-auto-status-local-v1-';
   var lastHabitAutoReview = null;
   var API_VERSION = '2026-03-11';
@@ -1878,6 +1880,24 @@ code {font:inherit;white-space:nowrap}
     return grouped;
   }
 
+  function automaticHabitConsentSpec(c) {
+    var ids={
+      typeId:habitPinnedId(c,'habitOccTypeProp'),
+      relationId:habitPinnedId(c,'habitOccRelationProp'),
+      dayId:habitPinnedId(c,'habitOccDayProp'),
+      countId:habitPinnedId(c,'habitOccCountProp')
+    };
+    Object.keys(ids).forEach(function(key){
+      if(!ids[key])throw new Error('Pin all existing habit-day property IDs before enabling');
+    });
+    if(!['count','minutes','hours'].includes(c.habitOccUnit)||
+       !c.habitOccTypeValue)throw new Error('Missing explicit habit count unit or type');
+    return {
+      sourceId:dataSourceId(c.taskSource,false),
+      habitSourceId:dataSourceId(c.habitSource,false),
+      ids:ids,typeValue:c.habitOccTypeValue,unit:c.habitOccUnit
+    };
+  }
   async function enableLocalAutomaticHabits() {
     if(active)return;
     busy(true);
@@ -1888,9 +1908,9 @@ code {font:inherit;white-space:nowrap}
       if(!scope || scope.config!==JSON.stringify(c) ||
          scope.sourceId!==dataSourceId(c.taskSource,false))
         throw new Error('Preview current existing habit-day rows and pin fields before enabling');
-      if(!['count','minutes','hours'].includes(c.habitOccUnit))
-        throw new Error('Select a valid ClickCounter or StopWatch unit');
-      dataSourceId(c.habitSource,false);
+      var spec=automaticHabitConsentSpec(c);
+      if(!scope.eligible || !scope.eligible.length)
+        throw new Error('No safe individually linked habits were reviewed; resolve mismatches and preview again');
       var ctx=await PluginAPI.getDayContext();
       if(!ctx||ctx.todayStr!==scope.day)
         throw new Error('SP logical day changed since habit-day preview');
@@ -1903,10 +1923,45 @@ code {font:inherit;white-space:nowrap}
         throw new Error('Link at least one existing Notion habit definition to an SP counter');
       if(!await PluginAPI.getSecret(TOKEN_KEY))
         throw new Error('Local Notion credential missing on this device');
+      // Revalidate the complete day inventory before recording any approvals.
+      var rows=await queryExistingHabitDay(c,scope.day,scope.sourceId,schema.properties||{});
+      var groups=habitDayCandidates(rows,c,scope.day);
+      var currentState=await PluginAPI.getAppState();
+      var counters=currentState&&currentState.simpleCounters||{};
+      var approved=[];
+      for(var entry of scope.eligible) {
+        var ids=groups.get(normalizedUUID(entry.habitId)+':'+scope.day)||[];
+        if(ids.length!==1||ids[0]!==entry.pageId)
+          throw new Error('Habit-day duplicate/moved since reviewed preview: '+entry.pageId);
+        var page=rows.find(function(p){return p.id===entry.pageId;});
+        var number=habitPageProperty(page,c,'habitOccCountProp');
+        if(!number || number.type!=='number' || !sameNumber(number.number,entry.before))
+          throw new Error('Existing Notion habit count changed after preview: '+entry.pageId);
+        var raw=await PluginAPI.loadSyncedData(HABIT_KEY_PREFIX+entry.habitId);
+        var link=raw?JSON.parse(raw):null;
+        if(!link || normalizedUUID(link.notionId)!==normalizedUUID(entry.habitId) ||
+           link.spCounterId!==entry.counterId ||
+           normalizedUUID(link.notionSourceId)!==spec.habitSourceId)
+          throw new Error('Habit definition/counter link changed since preview');
+        var sp=rawCounterValue(counters[entry.counterId],scope.day,spec.unit);
+        if(!sameNumber(sp,entry.after))
+          throw new Error('SP habit count changed since reviewed preview; re-preview');
+        approved.push({
+          version:1,habitId:entry.habitId,counterId:entry.counterId,
+          sourceId:spec.sourceId,habitSourceId:spec.habitSourceId,
+          spec:JSON.stringify(spec)
+        });
+      }
+      // Each approved habit definition has its own immutable ID-bound record;
+      // future daily rows cannot expand permission to unrelated habits.
+      for(var approval of approved)
+        await PluginAPI.persistDataSynced(JSON.stringify(approval),
+          AUTO_HABIT_APPROVAL_PREFIX+approval.habitId);
       await PluginAPI.setSecret(AUTO_HABIT_ENABLED_KEY,'enabled');
       ui('authorizeAutoHabitsLocal').checked=false;
       ui('autoHabitsStatus').textContent=
-        'Automatic habit-day counts ENABLED on this device: pinned existing rows only, monotonic Number writes; conflicts skipped.';
+        'Automatic counts enabled on THIS device for '+approved.length+
+        ' specifically approved habit definitions (including their future existing daily rows). No other habits may be updated.';
     }catch(e){fail(e);}
     finally{busy(false);}
   }
@@ -1940,7 +1995,7 @@ code {font:inherit;white-space:nowrap}
       var entries=await queryExistingHabitDay(c,day,sourceId,info.properties||{});
       var state=await PluginAPI.getAppState();
       var counters=state&&state.simpleCounters||{};
-      var staged=[],notes=[],seen=new Set(),duplicate=new Set();
+      var staged=[],reviewed=[],notes=[],seen=new Set(),duplicate=new Set();
       for(var page of entries) {
         if(!occurrenceMatches(page,c,day))continue;
         var habitId=habitRelId(page,c);
@@ -1961,6 +2016,12 @@ code {font:inherit;white-space:nowrap}
         if(!property||property.type!=='number')
           throw new Error('Occurrence value is not a Notion Number field');
         var before=property.number;
+        if(typeof before==='number' && before>0 && !sameNumber(before,after)) {
+          notes.push('Auto approval requires blank/zero or matching positive Notion count: '+page.id);
+        } else {
+          reviewed.push({pageId:page.id,habitId:habitId,counterId:link.spCounterId,
+            before:before,after:after});
+        }
         if(sameNumber(before,after))continue;
         if(typeof before==='number' && before>after){
           notes.push('Notion count exceeds SP (stale device risk): '+page.id);continue;
@@ -1973,9 +2034,15 @@ code {font:inherit;white-space:nowrap}
       // A duplicate habit-day row is not safe: invalidate every candidate
       // for the same habit and day rather than writing to a random duplicate.
       staged=staged.filter(function(x){return !duplicate.has(normalizedUUID(x.habitId)+':'+day);});
+      reviewed=reviewed.filter(function(x){
+        return !duplicate.has(normalizedUUID(x.habitId)+':'+day);
+      });
       stagedHabitDay={config:JSON.stringify(c),sourceId:sourceId,day:day,updates:staged};
-      lastHabitAutoReview={config:JSON.stringify(c),day:day,sourceId:sourceId};
-      ui('habitDayPlan').textContent='Logical day: '+day+'; '+staged.length+' eligible existing occurrence updates (not applied).\n'+
+      lastHabitAutoReview={config:JSON.stringify(c),day:day,
+        sourceId:sourceId,eligible:reviewed};
+      ui('habitDayPlan').textContent='Logical day: '+day+'; '+staged.length+
+        ' eligible existing occurrence updates (not applied); '+reviewed.length+
+        ' individually linked habits eligible for separate automatic consent.\n'+
         staged.map(function(x){return x.pageId+' ('+x.habitId+'): '+x.before+' → '+x.after+' '+x.unit;}).join('\n')+
         (notes.length?'\nSkipped:\n'+notes.join('\n'):'');
       message('Read-only habit-day diff complete. No Notion or SP data were modified.');

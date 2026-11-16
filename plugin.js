@@ -662,6 +662,7 @@ function alfCreateAutoTimeSync(api,options) {
 const ALF_AUTO_HABIT_FLAG='alf-auto-habit-local-enabled-v1';
 const ALF_AUTO_HABIT_PREFIX='alf-habit-auto-anchor-v1-';
 const ALF_AUTO_HABIT_LINK_PREFIX='alf-habit-definition-link-v1-';
+const ALF_AUTO_HABIT_APPROVAL_PREFIX='alf-habit-auto-allow-v1-';
 const ALF_AUTO_HABIT_PER_CYCLE=3;
 function alfAutoHabitSpec(c) {
   if(!c||c.version!==2)throw new Error('Invalid Notion mapping');
@@ -825,6 +826,19 @@ function alfCreateAutoHabitSync(api,options) {
       if(group.length!==1){stats.conflicts++;continue;}
       const {page,info}=group[0],ref=linksById.get(habitKey);
       if(!ref||duplicateCounters.has(ref.link.spCounterId)){stats.conflicts++;continue;}
+      // A linked definition is NOT itself permission for unattended writes.
+      // No v0.18 auto-enabled device gets legacy implicit blanket approval.
+      const approvalKey=ALF_AUTO_HABIT_APPROVAL_PREFIX+info.habitId;
+      const approvalRaw=await api.loadSyncedData(approvalKey);
+      let approval=null;
+      try{approval=approvalRaw?JSON.parse(approvalRaw):null;}catch(_){}
+      if(!approval || approval.version!==1 || approval.habitId!==info.habitId ||
+         approval.counterId!==ref.link.spCounterId ||
+         approval.sourceId!==spec.sourceId ||
+         approval.habitSourceId!==spec.habitSourceId ||
+         approval.spec!==JSON.stringify(spec)) {
+        stats.conflicts++;continue;
+      }
       const countData=alfAutoHabitCompatible(counters[ref.link.spCounterId],day,spec.unit);
       if(!countData){stats.unchanged++;continue;}
       try {
@@ -885,6 +899,7 @@ function alfCreateAutoHabitSync(api,options) {
           newState.simpleCounters[ref.link.spCounterId],day,spec.unit);
         if(!latestCount||latestCount.raw!==countData.raw ||
            await api.loadSyncedData(ref.key)!==ref.raw ||
+           await api.loadSyncedData(approvalKey)!==approvalRaw ||
            await api.loadSyncedData(anchorKey)!==rawAnchor ||
            await api.getSecret(ALF_AUTO_HABIT_FLAG)!=='enabled'){
           stats.conflicts++;continue;

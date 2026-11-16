@@ -46,9 +46,17 @@ function fixture(){
     countOnDay:{[DAY]:3}};
   const state={simpleCounters:{a:counter}};
   const linked={version:1,notionId:HABIT,spCounterId:'a',notionSourceId:HABIT_SOURCE};
+  const consentSpec={sourceId:BOARD,habitSourceId:HABIT_SOURCE,
+    ids:{typeId:'habit-type-id',relationId:'habit-relation-id',
+      dayId:'habit-date-id',countId:'habit-count-id'},
+    typeValue:'عادة',unit:'count'};
+  const consent={version:1,habitId:HABIT,counterId:'a',
+    sourceId:BOARD,habitSourceId:HABIT_SOURCE,
+    spec:JSON.stringify(consentSpec)};
   const store=new Map([
     ['alf-mapping-v2',JSON.stringify(c)],
-    ['alf-habit-definition-link-v1-'+HABIT,JSON.stringify(linked)]
+    ['alf-habit-definition-link-v1-'+HABIT,JSON.stringify(linked)],
+    ['alf-habit-auto-allow-v1-'+HABIT,JSON.stringify(consent)]
   ]);
   const secrets=new Map([
     ['alf-notion-token','ntn_FAKE_HABIT_TOKEN'],
@@ -210,6 +218,11 @@ test('StopWatch minutes write explicit converted Number, never raw milliseconds'
   const f=fixture();
   f.c.habitOccUnit='minutes';
   f.store.set('alf-mapping-v2',JSON.stringify(f.c));
+  // This mock represents a separate fresh user consent after changing unit.
+  const consent=JSON.parse(f.store.get('alf-habit-auto-allow-v1-'+HABIT));
+  const spec=JSON.parse(consent.spec);spec.unit='minutes';
+  consent.spec=JSON.stringify(spec);
+  f.store.set('alf-habit-auto-allow-v1-'+HABIT,JSON.stringify(consent));
   f.counter.type='StopWatch';
   f.counter.countOnDay[DAY]=600000;
   const result=await f.engine.runOnce();
@@ -318,4 +331,76 @@ test('unknown habit PATCH followed by more SP progress requires explicit reconci
   assert.equal(again.written,0);
   assert.equal(again.conflicts,1,'unanchored positive Notion count not equal to SP is conflict');
   assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,1);
+});
+
+
+test('an existing linked habit without per-habit consent is never written automatically',async()=>{
+  const f=fixture();
+  f.store.delete('alf-habit-auto-allow-v1-'+HABIT);
+  const result=await f.engine.runOnce();
+  assert.equal(result.written,0);
+  assert.equal(result.conflicts,1);
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(f.metadata.length,0);
+});
+test('different counter ID or occurrence mapping cannot reuse a previously approved habit',async()=>{
+  for(const change of ['counter','map','source']){
+    const f=fixture();
+    const consent=JSON.parse(f.store.get('alf-habit-auto-allow-v1-'+HABIT));
+    if(change==='counter')consent.counterId='different';
+    if(change==='map')consent.spec='{"not":"approved"}';
+    if(change==='source')consent.sourceId='ffffffffffffffffffffffffffffffff';
+    f.store.set('alf-habit-auto-allow-v1-'+HABIT,JSON.stringify(consent));
+    const result=await f.engine.runOnce();
+    assert.equal(result.written,0);
+    assert.equal(result.conflicts,1);
+    assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  }
+});
+test('unapproved second habit remains untouched even when first habit is approved',async()=>{
+  const f=fixture();
+  const page=JSON.parse(JSON.stringify(f.page));
+  page.id='habit-day-unapproved-2';
+  page.properties['قاعدة العادات'].relation=[{id:'new-definition'}];
+  f.rows.push(page);
+  f.store.set('alf-habit-definition-link-v1-new-definition',JSON.stringify({
+    version:1,notionId:'new-definition',spCounterId:'b',notionSourceId:HABIT_SOURCE
+  }));
+  f.state.simpleCounters.b={id:'b',type:'ClickCounter',isEnabled:true,
+    countOnDay:{[DAY]:7}};
+  const result=await f.engine.runOnce();
+  assert.equal(result.written,1,'approved habit may proceed normally');
+  assert.equal(f.page.properties['Habit Count'].number,3);
+  assert.equal(page.properties['Habit Count'].number,0,
+    'newly discovered unapproved definition cannot be updated');
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,1);
+});
+test('approval for a definition can apply on a later day only if its existing daily row exists',async()=>{
+  const f=fixture();
+  const next='2026-11-17';
+  f.env.day=next;
+  f.counter.countOnDay[next]=4;
+  // Existing row was created by the user's system independently, never Alf.
+  f.page.properties['يوم التنفيذ'].date={start:next};
+  const result=await f.engine.runOnce();
+  assert.equal(result.written,1);
+  assert.equal(f.page.properties['Habit Count'].number,4);
+  assert.equal(f.rows.length,1);
+  const record=JSON.parse(f.store.get(PREFIX+PAGE));
+  assert.equal(record.day,next);
+  assert.equal(record.habitId,HABIT);
+});
+test('disabling per-habit consent during an in-flight Notion GET blocks PATCH',async()=>{
+  const f=fixture();
+  const original=f.api.request;
+  f.api.request=async(url,opts)=>{
+    const ret=await original(url,opts);
+    if(opts.method==='GET'&&url.includes('/pages/'))
+      f.store.delete('alf-habit-auto-allow-v1-'+HABIT);
+    return ret;
+  };
+  const result=await f.engine.runOnce();
+  assert.equal(result.written,0);
+  assert.equal(result.conflicts,1);
+  assert.equal(f.requests.filter(x=>x.opts.method==='PATCH').length,0);
 });

@@ -1404,7 +1404,7 @@ test('mismatched or parent task SP tracked time never seeds an automated Notion 
 });
 
 test('automatic habit-day export requires separate consent and a current pinned preview',async()=>{
-  const rows=[habitOccurrence()],env=mount(rows);
+  const rows=[habitOccurrence('habit-original-1','habit-occ-1',0)],env=mount(rows);
   await setupHabitDay(env);
   await env.els('enableAutoHabitsBtn').events.click();
   assert.match(env.els('notice').textContent,/Explicitly authorize ongoing/);
@@ -1416,6 +1416,13 @@ test('automatic habit-day export requires separate consent and a current pinned 
   env.els('authorizeAutoHabitsLocal').checked=true;
   await env.els('enableAutoHabitsBtn').events.click();
   assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),'enabled');
+  const approvals=env.stores.filter(x=>x.key.startsWith('alf-habit-auto-allow-v1-'));
+  assert.equal(approvals.length,1,'only explicitly reviewed habit definition approved');
+  const permission=JSON.parse(approvals[0].data);
+  assert.equal(permission.habitId,'habit-original-1');
+  assert.equal(permission.counterId,'a');
+  assert.equal(permission.sourceId,'212b4a624b7d806989b9000b73ac11c8');
+  assert.equal(JSON.parse(permission.spec).unit,'count');
   assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0,
     'enabling automatic habits must not write to Notion');
   assert.equal(env.stores.filter(x=>x.key==='alf-auto-habit-local-enabled-v1').length,0,
@@ -1425,7 +1432,7 @@ test('automatic habit-day export requires separate consent and a current pinned 
 });
 
 test('changing SP logical day after habit preview refuses enabling auto habit export',async()=>{
-  const rows=[habitOccurrence()],env=mount(rows);
+  const rows=[habitOccurrence('habit-original-1','habit-occ-1',0)],env=mount(rows);
   await setupHabitDay(env);
   await env.els('previewHabitDay').events.click();
   env.setLogicalDay('2026-11-17');
@@ -1469,4 +1476,45 @@ test('automatic synchronization diagnostics read only local flags and last run c
   assert.match(report,/written=2/);
   assert.equal(env.requests.length,0,'diagnostic UI never queries or PATCHes Notion');
   assert.equal(env.updates.length,0,'diagnostics never change SP tasks');
+});
+
+
+test('no reviewed safe habit definition means auto export remains disabled',async()=>{
+  const rows=[habitOccurrence('habit-original-1','habit-occ-1',1)],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  assert.match(env.els('habitDayPlan').textContent,/0 individually linked habits eligible/);
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
+  assert.match(env.els('notice').textContent,/No safe individually linked habits/);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-auto-allow-v1-')).length,0);
+});
+test('auto consent excludes duplicate and unrelated existing habit-day records',async()=>{
+  const rows=[
+    habitOccurrence('habit-original-1','habit-occ-1',0),
+    habitOccurrence('unlinked-habit','unlinked-occ',0),
+    habitOccurrence('unlinked-habit','unlinked-duplicate',0)
+  ],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  assert.match(env.els('habitDayPlan').textContent,/1 individually linked habits eligible/);
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),'enabled');
+  const approved=env.stores.filter(x=>x.key.startsWith('alf-habit-auto-allow-v1-'));
+  assert.equal(approved.length,1);
+  assert.equal(JSON.parse(approved[0].data).habitId,'habit-original-1');
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+test('changed Notion occurrence after preview refuses automatic habit consent',async()=>{
+  const rows=[habitOccurrence('habit-original-1','habit-occ-1',0)],env=mount(rows);
+  await setupHabitDay(env);
+  await env.els('previewHabitDay').events.click();
+  rows[0].properties['Habit Count'].number=2;
+  env.els('authorizeAutoHabitsLocal').checked=true;
+  await env.els('enableAutoHabitsBtn').events.click();
+  assert.equal(await env.api.getSecret('alf-auto-habit-local-enabled-v1'),null);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-auto-allow-v1-')).length,0);
+  assert.match(env.els('notice').textContent,/Existing Notion habit count changed after preview/);
 });
