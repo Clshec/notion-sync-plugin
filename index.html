@@ -141,6 +141,27 @@ code {font:inherit;white-space:nowrap}
   <p id="planRefreshReport" role="status" aria-live="polite" class="muted"></p>
 </section>
 <section>
+  <h2>4c. Experimental automatic Notion → SP planning (THIS DEVICE only)</h2>
+  <p>First select already-linked, active tasks in the Notion preview. Prepare baselines <strong>only for tasks whose SP plan already agrees with Notion</strong>. If a task differs, manually review and apply the change in section 4b first. Preparing baselines writes only Alf synced metadata; it does not update either app.</p>
+  <p>After separately enabling on this device, the plugin checks a small batch of the anchored tasks approximately every 10 minutes <em>while Super Productivity and its plugin are running</em>. Only title, estimate and execution date can be refreshed, and only if the SP plan has not been edited since the last agreed baseline. Conflicts are skipped rather than overwritten. No Notion writes, task creation or deletion, focus totals, habit updates or SuperSync controls.</p>
+  <p class="muted">Experimental: enable on ONE device only. Android background suspension, offline periods, rate limits and SuperSync delivery can delay or interrupt runs. Turning this off is immediate for subsequent checks, not a cancellation of a write already in progress. No distributed lock or atomic conflict resolution is available.</p>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeAutoSeed" type="checkbox" style="width:auto">
+    <span>I authorize storing baselines for the selected, already-matching task plans (synced Alf metadata only).</span>
+  </label>
+  <div class="actions"><button id="seedAutoPlanBtn">Prepare matching selected tasks for safe automatic refresh</button></div>
+  <p id="autoSeedReport" role="status" aria-live="polite" class="muted"></p>
+  <label style="flex-direction:row;align-items:center;margin-top:12px">
+    <input id="authorizeAutoLocal" type="checkbox" style="width:auto">
+    <span>I explicitly enable automatic SP planning updates on THIS device only. I will not enable it simultaneously on another device.</span>
+  </label>
+  <div class="actions">
+    <button id="enableAutoPlanBtn">Enable this device (local setting)</button>
+    <button id="disableAutoPlanBtn">Disable this device</button>
+  </div>
+  <p id="autoPlanStatus" role="status" aria-live="polite" class="muted"></p>
+</section>
+<section>
   <h2>5. Optional actual work time → existing Notion tasks</h2>
   <p>This writeback changes <strong>only the mapped Actual Time Number property</strong> on each selected and linked Notion task. The original plan, deadline, status, task title, and relations remain unchanged. Parent task aggregates are skipped to prevent duplicate counting. No Pomodoro completion count is inferred from tracked time.</p>
   <div class="actions">
@@ -239,6 +260,8 @@ code {font:inherit;white-space:nowrap}
   var taskPropertyBindings = {};
   var habitPropertyBindings = {definitions:{},occurrences:{}};
   var TOKEN_KEY = 'alf-notion-token';
+  var AUTO_PLAN_ENABLED_KEY = 'alf-auto-plan-local-enabled-v1';
+  var AUTO_PLAN_ANCHOR_PREFIX = 'alf-plan-anchor-v1-';
   var API_VERSION = '2026-03-11';
   var MAX_PAGES = 300; // deliberate preview limit, not an import limit
   var INPUTS = ['taskSource','projectSource','habitSource','titleProp','typeProp','typeValues',
@@ -262,7 +285,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
+    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -1729,6 +1752,9 @@ code {font:inherit;white-space:nowrap}
     ui('importBtn').addEventListener('click',importChecked);
     ui('stagePlanBtn').addEventListener('click',stagePlanRefresh);
     ui('commitPlanBtn').addEventListener('click',commitPlanRefresh);
+    ui('seedAutoPlanBtn').addEventListener('click',seedAutomaticPlanAnchors);
+    ui('enableAutoPlanBtn').addEventListener('click',enableLocalAutomaticPlan);
+    ui('disableAutoPlanBtn').addEventListener('click',disableLocalAutomaticPlan);
     ui('planTimeBtn').addEventListener('click',stageActualTime);
     ui('pushTimeBtn').addEventListener('click',commitActualTime);
     ui('loadSessions').addEventListener('click',showFocusSessions);
