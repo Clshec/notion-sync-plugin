@@ -86,3 +86,9 @@ Do not round to two decimal hours if that would discard meaningful tracked time.
 Existing task property names are **not** stable IDs: users may rename `الوقت المخطط له` to `Planned Time` without changing the underlying property. The explicit **Pin task property IDs** action reads the Notion data-source schema and persists `taskPropertyBindings` beside the original `alf-mapping-v2` configuration. Each binding contains `{sourceId, input, id}` and is valid only for its original data source and configured input. Preview/import and opt-in Actual Time PATCH resolve page properties and updates by ID. Missing IDs or incompatible types fail closed; a same-name replacement is never silently adopted. Changing the input label invalidates the old binding until a new explicit pin.
 
 No Notion property is created or renamed by this action. Habit definition/occurrence property pinning, true sync, and accurate historical Pomodoro session data remain future work.
+
+### v0.9 read-only work-session planning and observation
+
+The task preview now computes `ceil(timeEstimateMs / (configuredPomodoroMinutes * 60000))`, using only the **existing** Notion planned time Number field and explicit unit conversion (Hours/Minutes). The work interval is configurable per user, default 25 minutes. It is an estimate/target, not a completed Pomodoro record or host timer setting. No Notion schema changes are made.
+
+The optional focus comparison reads uniquely keyed, **observed only** SP session metadata and joins it to Notion pages only through an unambiguous SP task identity marker. It separately displays verified automatic Pomodoro, Flowtime and Countdown observation counts, marks them incomplete, and never PATCHes Notion. A proper official structured per-task/per-mode SP focus-session history API remains a prerequisite for reliable completed-session counts in Notion.
