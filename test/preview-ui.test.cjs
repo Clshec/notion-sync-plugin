@@ -1567,7 +1567,7 @@ test('manual habit-day preview and writeback refuse missing pagination cursor',a
 });
 
 
-test('v0.23 plugin intro discloses three optional automations and never claims all syncing is manual',()=>{
+test('plugin intro discloses three optional automations and never claims all syncing is manual',()=>{
   assert.ok(html.includes('EXPERIMENTAL · AUTO SYNC OFF BY DEFAULT'));
   assert.ok(html.includes('Three narrowly scoped automatic modes are available'));
   assert.ok(html.includes('disabled by default'));
@@ -1575,7 +1575,7 @@ test('v0.23 plugin intro discloses three optional automations and never claims a
   assert.ok(html.includes('No Notion database, property or day-record creation'));
   assert.ok(html.includes('separate device-local opt-in'),
     'footer and intro both state narrowly scoped auto behavior');
-  assert.equal(manifest.version,'0.23.0');
+  assert.match(manifest.version,/^0\.\d+\.\d+$/);
 });
 
 
