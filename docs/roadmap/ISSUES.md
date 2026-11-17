@@ -4,6 +4,12 @@
 
 Notion tracking reference: https://app.notion.com/p/41ab4a624b7d81dbbc28e1c57279f725 .
 
+## P0 — Daily-habit source and Woodpecker CI migration (v0.33)
+
+- The sole execution source is `اللوح` daily `عادة` pages filtered by SP logical day, with `قاعدة العادات` relation as definition/identity reference. No definition-only import into SP.
+- New primary read-only preview checks original status, date and duplicate/missing relation; no Notion/SP writes, no counter creation, no guessed link persistence.
+- `.woodpecker.yml` replaces GitHub Actions for this repository; all tests must execute in the self-hosted Gumacu Kubernetes Woodpecker agent. Its server/agent/database are running, but `Clshec/notion-sync-plugin` has NOT yet been activated in Woodpecker. An authenticated private activation and real successful run remain blocking (do not expose CI UI publicly).
+- Docs: `docs/architecture/daily-habits-from-board-v033.md`.
 ## P0 — Alf one-token connection and verified auto-discovery (v0.30 → v0.31)
 
 **Implemented and live read-only accepted (2026-11-17):** one prominent token field, Notion 2026-03-11 host-side `/search`, exact matching for `اللوح`, `قاعدة العادات`, `المستويات العليا`, `المستويات الفرعية`, typed relation/option checks and automatic property-ID pinning in `alf-mapping-v2`. The actual Alf integration initially had `No page access`; four original database pages were granted through Notion's Content access. Super Productivity 20.0.0 was restarted to activate the host handler; one-token connection then discovered all four sources and **13 verified field pins**. Read-only preview: 300 mixed board records (65 eligible tasks/bundles), 41 habit definitions and 4 existing SP counters. No Notion/SP record writes. See [the design contract](../architecture/alf-life-os-zero-config.md).

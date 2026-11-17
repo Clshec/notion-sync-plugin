@@ -1,5 +1,10 @@
 # Alf Life OS → Super Productivity: zero-configuration connection (v0.31)
 
+> **v0.33 correction:** daily habit execution comes from the existing
+> `اللوح` rows (`نوع الصفحة = عادة` + `يوم التنفيذ`). The existing
+> `قاعدة العادات` is a reference/definition source only. See
+> [daily-habit source contract](daily-habits-from-board-v033.md).
+
 **Status (2026-11-17): implemented, live Windows Notion read-only connection accepted for v0.30, v0.31 task preview filtering/pagination added; Android and real writeback remain separate gates.** This document supersedes the upstream English-schema configuration instructions for the Alf profile. The plugin remains an MIT fork of Alessio Lovato's original.
 
 ## Product contract — exactly one user input

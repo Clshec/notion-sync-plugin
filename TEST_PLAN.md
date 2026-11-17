@@ -1,4 +1,14 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.32 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.33 experimental)
+
+**v0.33 acceptance:** The quick `عادات اليوم من اللوح` action must
+query **the original اللوح**, NOT `قاعدة العادات`, using the SP
+logical date and exact pinned `نوع الصفحة = عادة` filter. A duplicate
+habit/day or missing definition relation must not appear as eligible.
+The original daily board title/date/status appear without Notion or SP
+writes or persisting a guessed counter link. Test authority is the
+self-hosted Gumacu **Woodpecker** runner via `/.woodpecker.yml` —
+NOT GitHub Actions. Repository activation and a verified Woodpecker run
+are still a separate gate.
 
 **v0.32 habit-name suggestion acceptance:** Verify that a uniquely matching Notion habit title and existing SP counter title are preselected in the review table after whitespace/case normalization. Preview MUST NOT persist links. A separate Save habit mappings action is required. Duplicate habit titles and duplicate counter titles must not be auto-selected; mismatches remain unlinked. Verify previously saved explicit ID links retain precedence. No Notion PATCH, SP counter creation, or automatic writer enablement.
 
