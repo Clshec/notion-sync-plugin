@@ -143,6 +143,7 @@ code {font:inherit;white-space:nowrap}
   <div class="table-wrap">
     <table><thead><tr><th>Select</th><th>Notion task</th><th>Type</th><th>Execution day</th><th>Deadline</th><th>Estimate</th><th>Actual</th><th>Status</th><th>Planned Pomodoros</th><th>Observed focus (incomplete)</th></tr></thead><tbody id="results"></tbody></table>
   </div>
+  <div class="actions"><button id="nextPreviewBtn" hidden>Next 75 matching tasks (READ ONLY)</button></div>
 </section>
 <section>
   <h2>4. Optional manual import into Super Productivity</h2>
@@ -355,6 +356,7 @@ code {font:inherit;white-space:nowrap}
   var taskPropertyBindings = {};
   var habitPropertyBindings = {definitions:{},occurrences:{}};
   var alfProfileMetadata = null;
+  var nextTaskPreviewCursor = null;
   var TOKEN_KEY = 'alf-notion-token';
   var AUTO_PLAN_ENABLED_KEY = 'alf-auto-plan-local-enabled-v1';
   var AUTO_PLAN_ANCHOR_PREFIX = 'alf-plan-anchor-v1-';
@@ -366,7 +368,7 @@ code {font:inherit;white-space:nowrap}
   var AUTO_STATUS_PREFIX = 'alf-auto-status-local-v1-';
   var lastHabitAutoReview = null;
   var API_VERSION = '2026-03-11';
-  var MAX_PAGES = 300; // deliberate preview limit, not an import limit
+  var TASK_PREVIEW_PAGE_SIZE = 75; // one displayable Notion task batch
   var ALF_HOST_CHANNEL = 'alf-notion-host-rpc-v1';
   var alfHostSeq = 0;
   var alfHostPending = new Map();
@@ -437,7 +439,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['connectAuto','quickPreviewTasks','quickPreviewHabits','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['connectAuto','quickPreviewTasks','quickPreviewHabits','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -518,6 +520,7 @@ code {font:inherit;white-space:nowrap}
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
       putForm(discovery.config);
       lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;
+      nextTaskPreviewCursor=null;ui('nextPreviewBtn').hidden=true;
       stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;
       stagedHabitStatus=null;stagedObservedPomo=null;
       ui('quickPreviews').hidden=false;
@@ -717,80 +720,138 @@ code {font:inherit;white-space:nowrap}
     return estimate===null?'—':String(Math.ceil(estimate/(interval*60000)));
   }
 
+  function clearTaskPreviewStages() {
+    stagedTimeChanges=null;stagedPlanRefresh=null;stagedObservedPomo=null;
+    ui('authorizePlanRefresh').checked=false;
+    ui('planRefreshDiff').textContent='';
+    ui('authorizeObservedPomo').checked=false;
+    ui('observedPomoPlan').textContent='';
+    ui('authorizeTime').checked=false;
+    ui('timePlan').textContent='';
+    ui('authorizeImport').checked=false;
+  }
+  function allowedTaskTypes(c) {
+    var values=String(c.typeValues||'').split(',').map(function(x){
+      return x.trim();
+    }).filter(Boolean);
+    values=Array.from(new Set(values));
+    if(!c.titleProp || !c.typeProp || !values.length || values.length>20)
+      throw new Error('Set an existing title property, item type property, and a bounded allowlist of task types');
+    return values;
+  }
+  function taskTypeQueryFilter(c,schema,types) {
+    var field=schemaTaskProperty(schema,c,'typeProp');
+    if(!field || !['multi_select','select'].includes(field.type))
+      throw new Error('Existing Notion task type must be a Select or Multi-select field');
+    var idOrName=taskWriteKey(c,'typeProp');
+    var clauses=types.map(function(value){
+      var v={property:idOrName};
+      if(field.type==='multi_select')v.multi_select={contains:value};
+      else v.select={equals:value};
+      return v;
+    });
+    return clauses.length===1 ? clauses[0] : {or:clauses};
+  }
+  async function fetchTaskPreviewPage(c,id,schema,types,cursor) {
+    var body={
+      page_size:TASK_PREVIEW_PAGE_SIZE,
+      filter:taskTypeQueryFilter(c,schema,types)
+    };
+    if(cursor)body.start_cursor=cursor;
+    var response=await notion('/data_sources/'+encodeURIComponent(id)+'/query','POST',body);
+    if(!response || !Array.isArray(response.results) ||
+       response.results.length>TASK_PREVIEW_PAGE_SIZE)
+      throw new Error('Unexpected or unbounded Notion task page');
+    var next=null;
+    if(response.has_more) {
+      if(typeof response.next_cursor!=='string' || !response.next_cursor ||
+         response.next_cursor===cursor)
+        throw new Error('Notion task cursor missing or repeated');
+      next=response.next_cursor;
+    }
+    var rows=response.results.filter(function(page){
+      if (!page || page.object!=='page' || page.in_trash===true) return false;
+      var found=typeValue(taskProperty(page,c,'typeProp'));
+      return found.some(function(t){return types.includes(t);});
+    });
+    if(new Set(rows.map(function(p){return p.id;})).size!==rows.length)
+      throw new Error('Duplicate Notion task IDs in one page');
+    return {rows:rows,readCount:response.results.length,nextCursor:next};
+  }
+  function drawTaskPreview(c,interval,batch,tasks) {
+    var tbody=ui('results');
+    tbody.replaceChildren();
+    lastVisibleRows=batch.rows;
+    lastPreviewConfig=JSON.stringify(c);
+    nextTaskPreviewCursor=batch.nextCursor;
+    ui('nextPreviewBtn').hidden=!batch.nextCursor;
+    lastVisibleRows.forEach(function(page){
+      var tr=document.createElement('tr');
+      var selection=document.createElement('td'),checkbox=document.createElement('input');
+      checkbox.type='checkbox';
+      checkbox.className='rowSelector';
+      checkbox.dataset.pageId=page.id;
+      checkbox.setAttribute('aria-label','Select '+textValue(taskProperty(page,c,'titleProp')));
+      selection.appendChild(checkbox);
+      tr.appendChild(selection);
+      appendCell(tr,textValue(taskProperty(page,c,'titleProp')));
+      appendCell(tr,typeValue(taskProperty(page,c,'typeProp')).join(', '));
+      appendCell(tr,dateValue(taskProperty(page,c,'executionProp')));
+      appendCell(tr,dateValue(taskProperty(page,c,'deadlineProp')));
+      appendCell(tr,numberValue(taskProperty(page,c,'estimateProp'),c.unit));
+      appendCell(tr,numberValue(taskProperty(page,c,'actualProp'),c.unit));
+      appendCell(tr,statusValue(taskProperty(page,c,'statusProp')));
+      appendCell(tr,plannedPomodoros(page,c,interval));
+      appendCell(tr,'— (compare after linking)');
+      tbody.appendChild(tr);
+    });
+    ui('summary').textContent='Read '+batch.readCount+' Notion pages; '+batch.rows.length+
+      ' matched configured task types. Displaying '+batch.rows.length+
+      '. Local SP active tasks: '+(Array.isArray(tasks)?tasks.length:0)+'.'+
+      (batch.nextCursor?' More eligible tasks are available; use Next 75.':' All eligible tasks in this query have been reached.')+
+      ' Work interval: '+interval+'m. Planned Pomodoros are estimates, not completion claims. No data written.';
+  }
   async function preview() {
-    if (active) return;
+    if(active)return;
     busy(true);
-    lastPreviewConfig = null;
-    lastVisibleRows = [];
-    stagedTimeChanges = null;
-    stagedPlanRefresh = null;
-    ui('authorizePlanRefresh').checked = false;
-    ui('planRefreshDiff').textContent = '';
-    stagedObservedPomo = null;
-    ui('authorizeObservedPomo').checked = false;
-    ui('observedPomoPlan').textContent = '';
-    ui('timePlan').textContent = '';
+    lastPreviewConfig=null;lastVisibleRows=[];nextTaskPreviewCursor=null;
+    ui('nextPreviewBtn').hidden=true;
+    clearTaskPreviewStages();
     ui('results').replaceChildren();
     try {
-      var c = getForm();
-      var id = dataSourceId(c.taskSource,false);
-      var allowed = String(c.typeValues||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
-      if (!c.titleProp || !c.typeProp || allowed.length === 0) {
-        throw new Error('Set a title property, an item type property, and at least one explicitly allowed item type');
-      }
-      var interval=pomodoroWorkInterval(c);
-      var source = await notion('/data_sources/' + encodeURIComponent(id));
-      var schema = source.properties || {};
-      var mismatches = propTypes(schema,c);
-      if (mismatches.length) throw new Error('Fix mapping: ' + mismatches.join('; '));
-      var all=[],cursor, truncated=false;
-      do {
-        var body={page_size:Math.min(100,MAX_PAGES-all.length)};
-        if (cursor) body.start_cursor=cursor;
-        var page=await notion('/data_sources/'+encodeURIComponent(id)+'/query','POST',body);
-        if (!page || !Array.isArray(page.results)) throw new Error('Unexpected Notion query response');
-        all=all.concat(page.results);
-        cursor=page.has_more ? page.next_cursor : null;
-        if (all.length>=MAX_PAGES) {truncated=!!cursor;break;}
-      } while (cursor);
-      var rows=all.filter(function (page) {
-        if (!page || page.object!=='page' || page.in_trash===true) return false;
-        var types=typeValue(taskProperty(page,c,'typeProp'));
-        return types.some(function(t){return allowed.indexOf(t)>=0;});
-      });
+      var c=getForm(),id=dataSourceId(c.taskSource,false);
+      var types=allowedTaskTypes(c),interval=pomodoroWorkInterval(c);
+      var source=await notion('/data_sources/'+encodeURIComponent(id));
+      var schema=source.properties||{},mismatches=propTypes(schema,c);
+      if(mismatches.length)throw new Error('Fix mapping: '+mismatches.join('; '));
+      var batch=await fetchTaskPreviewPage(c,id,schema,types,null);
       var tasks=await PluginAPI.getTasks();
-      var tbody=ui('results');
-      tbody.replaceChildren();
-      lastVisibleRows = rows.slice(0,75);
-      lastPreviewConfig = JSON.stringify(c);
-      lastVisibleRows.forEach(function(page){
-        var p=page.properties||{}, tr=document.createElement('tr');
-        var selection=document.createElement('td'),checkbox=document.createElement('input');
-        checkbox.type='checkbox';
-        checkbox.className='rowSelector';
-        checkbox.dataset.pageId=page.id;
-        checkbox.setAttribute('aria-label','Select '+textValue(taskProperty(page,c,'titleProp')));
-        selection.appendChild(checkbox);
-        tr.appendChild(selection);
-        appendCell(tr,textValue(taskProperty(page,c,'titleProp')));
-        appendCell(tr,typeValue(taskProperty(page,c,'typeProp')).join(', '));
-        appendCell(tr,dateValue(taskProperty(page,c,'executionProp')));
-        appendCell(tr,dateValue(taskProperty(page,c,'deadlineProp')));
-        appendCell(tr,numberValue(taskProperty(page,c,'estimateProp'),c.unit));
-        appendCell(tr,numberValue(taskProperty(page,c,'actualProp'),c.unit));
-        appendCell(tr,statusValue(taskProperty(page,c,'statusProp')));
-        appendCell(tr,plannedPomodoros(page,c,interval));
-        appendCell(tr,'— (compare after linking)');
-        tbody.appendChild(tr);
-      });
-      ui('summary').textContent='Read '+all.length+' Notion pages; '+rows.length+
-        ' matched configured task types. Displaying first '+Math.min(rows.length,75)+
-        '. Local SP active tasks: '+(Array.isArray(tasks)?tasks.length:0)+'.'+
-        (truncated?' Preview capped at '+MAX_PAGES+' pages; data source has more.':'')+
-        ' Work interval: '+interval+'m. Planned Pomodoros are estimates, not completion claims. No data written.';
-      message('Read-only preview finished. No Notion pages, Super Productivity tasks or habits were modified.');
-    } catch(e) { fail(e); }
-    finally {busy(false);}
+      drawTaskPreview(c,interval,batch,tasks);
+      message('Read-only task preview finished. Only eligible task types were queried; no Notion or SP writes.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function previewNextPage() {
+    if(active)return;
+    var expectedCursor=nextTaskPreviewCursor,expectedConfig=lastPreviewConfig;
+    if(!expectedCursor || !expectedConfig)return;
+    busy(true);
+    try {
+      var c=getForm();
+      if(JSON.stringify(c)!==expectedConfig)
+        throw new Error('Mapping changed since the last read-only task preview; restart preview');
+      var id=dataSourceId(c.taskSource,false),types=allowedTaskTypes(c);
+      var interval=pomodoroWorkInterval(c);
+      var source=await notion('/data_sources/'+encodeURIComponent(id));
+      var schema=source.properties||{},mismatches=propTypes(schema,c);
+      if(mismatches.length)throw new Error('Mapping changed: '+mismatches.join('; '));
+      var batch=await fetchTaskPreviewPage(c,id,schema,types,expectedCursor);
+      var tasks=await PluginAPI.getTasks();
+      clearTaskPreviewStages(); // any staged writes reference the previous displayed page
+      drawTaskPreview(c,interval,batch,tasks);
+      message('Next eligible task batch loaded. All selections and prior review authorizations cleared.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
   }
 
   function notionPageMarker(id) {
@@ -2583,6 +2644,7 @@ code {font:inherit;white-space:nowrap}
     ui('schemaBtn').addEventListener('click',inspect);
     ui('pinProps').addEventListener('click',pinTaskPropertyIds);
     ui('previewBtn').addEventListener('click',preview);
+    ui('nextPreviewBtn').addEventListener('click',previewNextPage);
     ui('importBtn').addEventListener('click',importChecked);
     ui('stagePlanBtn').addEventListener('click',stagePlanRefresh);
     ui('commitPlanBtn').addEventListener('click',commitPlanRefresh);

@@ -1,6 +1,6 @@
 # Notion Database Structure Guide
 
-> **LEGACY UPSTREAM ENGLISH TEMPLATE — NOT REQUIRED FOR ALF.** Do not create a new Tasks/Projects database or `SP Task ID`, `Complete`, `Name`, `Time Spent` or new properties in the user's Notion. The actual Alf v0.30 implementation maps existing Arabic fields and four existing sources directly. See [the current read-only verified Alf schema and zero-configuration architecture](architecture/alf-life-os-zero-config.md). All instructions below are historical upstream reference only.
+> **LEGACY UPSTREAM ENGLISH TEMPLATE — NOT REQUIRED FOR ALF.** Do not create a new Tasks/Projects database or `SP Task ID`, `Complete`, `Name`, `Time Spent` or new properties in the user's Notion. The actual Alf v0.31 implementation maps existing Arabic fields and four existing sources directly. See [the current read-only verified Alf schema and zero-configuration architecture](architecture/alf-life-os-zero-config.md). All instructions below are historical upstream reference only.
 
 This document details the required and optional database properties for the Notion Sync Plugin to function correctly.
 

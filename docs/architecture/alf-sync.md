@@ -1,6 +1,6 @@
 # Alf Notion Super Productivity — Architecture (v0.1 proposal)
 
-> **Current implemented Alf-onboarding architecture is [v0.30 zero-config](alf-life-os-zero-config.md).** This historical v0.1 proposal described generic manual mapping. In the product's actual Alf life-OS mode, the user supplies **only a Notion Access Token** and the plugin discovers/validates four named existing sources and pins original fields automatically. Never follow the old instruction below to ask the user for UUIDs or create a new Notion database. Automatic writes remain separately OFF by default.
+> **Current implemented Alf-onboarding architecture is [v0.31 zero-config](alf-life-os-zero-config.md).** This historical v0.1 proposal described generic manual mapping. In the product's actual Alf life-OS mode, the user supplies **only a Notion Access Token** and the plugin discovers/validates four named existing sources and pins original fields automatically. Never follow the old instruction below to ask the user for UUIDs or create a new Notion database. Automatic writes remain separately OFF by default.
 
 **Status:** foundation specification, not a claim of working synchronization.  
 **Upstream:** [AlessioLovato/notion-sync-plugin](https://github.com/AlessioLovato/notion-sync-plugin), MIT. Keep attribution and upstream history.  

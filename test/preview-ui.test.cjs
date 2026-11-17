@@ -11,7 +11,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const host = fs.readFileSync(path.join(root, 'plugin.js'), 'utf8');
 
-function mount(customRows, habitRows) {
+function mount(customRows, habitRows, taskPages) {
   const els = new Map();
   const requests = [];
   const stores = [];
@@ -119,6 +119,12 @@ function mount(customRows, habitRows) {
       }
       if (opts.method==='POST' && url.endsWith(habitId+'/query'))
         return {results:habitRows||[],has_more:false,next_cursor:null};
+      if (opts.method==='POST' && taskPages && url.endsWith('/query')) {
+        const key=opts.body.start_cursor||'__first__';
+        if(!Object.hasOwn(taskPages,key))
+          throw new Error('Unexpected Notion task cursor');
+        return taskPages[key];
+      }
       if (opts.method==='POST') return {results: customRows || [
         {object:'page',id:'n1',properties:{
           'المصدر':{title:[{plain_text:'Sample task'}]},
@@ -220,6 +226,79 @@ test('preview queries only Notion data source, filters knowledge and never write
   assert.match(env.els('summary').textContent,/2 Notion pages/);
   assert.match(env.els('summary').textContent,/1 matched/);
   assert.match(env.els('summary').textContent,/Local SP active tasks: 1/);
+  assert.equal(env.requests[1].opts.body.page_size,75);
+  assert.equal(env.requests[1].opts.body.filter.or.length,2);
+  assert.equal(env.requests[1].opts.body.filter.or[0].property,'نوع الصفحة');
+  assert.equal(env.requests[1].opts.body.filter.or[0].multi_select.contains,'مهمة');
+  assert.equal(env.requests[1].opts.body.filter.or[1].multi_select.contains,'حزمة');
+});
+
+test('task preview pages only eligible Notion tasks, clears approvals on Next and never writes',async()=>{
+  const row=(id,title)=>({object:'page',id,properties:{
+    'المصدر':{type:'title',title:[{plain_text:title}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'مهمة'}]},
+    'Status':{type:'status',status:{name:'Not started'}}
+  }});
+  const env=mount(null,null,{
+    '__first__':{results:[row('n1','First task')],has_more:true,
+      next_cursor:'cursor1'},
+    cursor1:{results:[row('n2','Next task')],has_more:false,
+      next_cursor:null}
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('token').value='ntn_TEST_ONLY_PAGINATION';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  assert.equal(env.els('results').children.length,1);
+  assert.equal(env.els('results').children[0].children[1].textContent,'First task');
+  assert.equal(env.els('nextPreviewBtn').hidden,false);
+  env.els('authorizeImport').checked=true;
+  env.els('authorizePlanRefresh').checked=true;
+  env.els('authorizeTime').checked=true;
+  await env.els('nextPreviewBtn').events.click();
+  assert.equal(env.requests.length,4);
+  assert.equal(env.requests[3].opts.body.start_cursor,'cursor1');
+  assert.equal(env.requests[3].opts.body.page_size,75);
+  assert.equal(env.els('results').children.length,1);
+  assert.equal(env.els('results').children[0].children[1].textContent,'Next task');
+  assert.equal(env.els('nextPreviewBtn').hidden,true);
+  assert.equal(env.els('authorizeImport').checked,false);
+  assert.equal(env.els('authorizePlanRefresh').checked,false);
+  assert.equal(env.els('authorizeTime').checked,false);
+  assert.ok(env.requests.every(q=>q.opts.method==='GET'||q.opts.method==='POST'));
+  assert.equal(env.imports.length,0);
+  assert.equal(env.updates.length,0);
+});
+
+test('task preview Next refuses changed mapping and does not fetch another page',async()=>{
+  const env=mount(null,null,{
+    '__first__':{results:[],has_more:true,next_cursor:'cursor1'}
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('token').value='ntn_TEST_ONLY_MAPPING';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  assert.equal(env.requests.length,2);
+  env.els('typeValues').value='تعلم';
+  await env.els('nextPreviewBtn').events.click();
+  assert.equal(env.requests.length,2);
+  assert.match(env.els('notice').textContent,/Mapping changed/);
+});
+
+test('task preview fails closed if Notion reports a missing pagination cursor',async()=>{
+  const env=mount(null,null,{
+    '__first__':{results:[],has_more:true,next_cursor:''}
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('token').value='ntn_TEST_ONLY_CURSOR';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  assert.match(env.els('notice').textContent,/cursor missing/);
+  assert.equal(env.els('results').children.length,0);
+  assert.equal(env.els('nextPreviewBtn').hidden,true);
 });
 
 test('preview refuses missing allowlist to avoid importing unrelated pages', async () => {
