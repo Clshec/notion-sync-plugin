@@ -35,11 +35,40 @@ th,td {padding:7px 9px;border-bottom:1px solid #8884;text-align:left;vertical-al
 th {font-weight:700}
 footer {font-size:.8rem;color:GrayText;padding-bottom:22px}
 code {font:inherit;white-space:nowrap}
+.quick-start{border-color:#27855a66;background:color-mix(in srgb, Canvas 94%, #27855a 6%)}
+.quick-start h2{font-size:1.12rem}
+.quick-start .actions button{flex:1;min-width:155px}
+.advanced summary{cursor:pointer;padding:13px 2px;font-weight:600}
+.advanced[open] summary{margin-bottom:10px}
 </style>
 </head>
 <body>
 <main>
 <header><span class="logo">ألف</span><div><h1>Alf Notion Super Productivity</h1><small>Notion plans · Super Productivity executes · Windows + Android</small></div></header>
+<section>
+  <strong class="status">نسخة تجريبية — المزامنة التلقائية مغلقة</strong>
+  <p>Notion هو المكان الأساسي للتخطيط، وSuper Productivity للتنفيذ. ربط الحساب هنا لا يغيّر أي سجلات أو مهام.</p>
+</section>
+<section class="quick-start" aria-labelledby="quickTitle">
+  <h2 id="quickTitle">اربط Notion بخطوة واحدة</h2>
+  <p>انسخ رمز الوصول من Notion والصقه هنا. ستكتشف ألف قواعد «اللوح» و«العادات» و«المستويات العليا والفرعية» والحقول والعلاقات تلقائيًا، دون كتابة معرفات أو أسماء أعمدة.</p>
+  <label>Notion Access Token
+    <input id="quickToken" type="password" autocomplete="off" placeholder="الصق التوكن هنا (يُحفظ على هذا الجهاز فقط)">
+  </label>
+  <div class="actions">
+    <button id="connectAuto" class="primary">اتصال واكتشاف النظام تلقائيًا</button>
+  </div>
+  <p id="quickReport" role="status" aria-live="polite">لم يتم اختبار اتصال Notion بعد. المزامنة التلقائية والكتابة مغلقتان.</p>
+  <div id="quickPreviews" hidden>
+    <div class="actions">
+      <button id="quickPreviewTasks">استعراض المهام من اللوح (قراءة فقط)</button>
+      <button id="quickPreviewHabits">استعراض العادات (قراءة فقط)</button>
+    </div>
+  </div>
+  <p class="muted"><small>لو ظهرت رسالة عن صلاحيات Notion، افتح قواعد البيانات الأصلية واختر Connections ثم أضف تكامل ألف إليها؛ لا توجد بيانات تقنية أخرى مطلوبة.</small></p>
+</section>
+<details id="advancedSettings" class="advanced">
+<summary>إعدادات متقدمة وتشخيص للمطورين فقط (اختياري)</summary>
 <section>
   <strong class="status">EXPERIMENTAL · AUTO SYNC OFF BY DEFAULT</strong>
   <p>Notion plans; Super Productivity executes. Preview and property-ID pinning are read-only against Notion. Manual task import, time, habit and partial observed-Pomodoro writebacks each require separate review and approval. Three narrowly scoped automatic modes are available <strong>only after explicit per-device opt-in</strong>: linked-task planning, positive tracked work time and approved existing habit-day values. All three are <strong>disabled by default</strong>; they are not full two-way sync. No Notion database, property or day-record creation and no changes to SuperSync settings.</p>
@@ -307,6 +336,7 @@ code {font:inherit;white-space:nowrap}
   <pre id="autoStatusReport" style="white-space:pre-wrap;max-height:230px;overflow:auto"></pre>
   <p class="muted">Successful code execution does not confirm a second device has received SuperSync data. A conflict/error count indicates affected records were skipped, not silently overwritten. Android background sleep and Notion rate limits may mean no recent check at all.</p>
 </section>
+</details>
 <footer>MIT-licensed fork of Alessio Lovato's Notion Sync Plugin. Notion API: 2026-03-11. Review permissions before using. Three narrowly scoped automatic paths are available with separate device-local opt-in; all are OFF by default and experimental, not complete two-way synchronization.</footer>
 </main>
 <script>
@@ -324,6 +354,7 @@ code {font:inherit;white-space:nowrap}
   var stagedObservedPomo = null;
   var taskPropertyBindings = {};
   var habitPropertyBindings = {definitions:{},occurrences:{}};
+  var alfProfileMetadata = null;
   var TOKEN_KEY = 'alf-notion-token';
   var AUTO_PLAN_ENABLED_KEY = 'alf-auto-plan-local-enabled-v1';
   var AUTO_PLAN_ANCHOR_PREFIX = 'alf-plan-anchor-v1-';
@@ -361,7 +392,7 @@ code {font:inherit;white-space:nowrap}
       var timeout=setTimeout(function(){
         alfHostPending.delete(id);
         reject(new Error('Alf host did not respond; no operation confirmed'));
-      },30000);
+      },op==='discover'?90000:30000);
       alfHostPending.set(id,{resolve:resolve,reject:reject,timeout:timeout});
       window.parent.postMessage({
         channel:ALF_HOST_CHANNEL,type:'request',id:id,op:op,args:args||{}
@@ -406,7 +437,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['connectAuto','quickPreviewTasks','quickPreviewHabits','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -415,6 +446,7 @@ code {font:inherit;white-space:nowrap}
       c.taskPropertyBindings = JSON.parse(JSON.stringify(taskPropertyBindings));
     if (Object.keys(habitPropertyBindings.definitions).length || Object.keys(habitPropertyBindings.occurrences).length)
       c.habitPropertyBindings = JSON.parse(JSON.stringify(habitPropertyBindings));
+    if (alfProfileMetadata) c.alfProfile = JSON.parse(JSON.stringify(alfProfileMetadata));
     return c;
   }
   function putForm(c) {
@@ -426,6 +458,75 @@ code {font:inherit;white-space:nowrap}
       {definitions:h.definitions && typeof h.definitions==='object'?h.definitions:{},
        occurrences:h.occurrences && typeof h.occurrences==='object'?h.occurrences:{}} :
       {definitions:{},occurrences:{}};
+    alfProfileMetadata = c.alfProfile && typeof c.alfProfile==='object' &&
+      c.alfProfile.name==='alf-life-os' ? c.alfProfile : null;
+  }
+  function alfQuickReady(config) {
+    var profile=config && config.alfProfile;
+    return !!(profile && profile.name==='alf-life-os' &&
+      config.taskSource && config.habitSource &&
+      config.taskPropertyBindings && config.habitPropertyBindings);
+  }
+  function alfQuickMessage(error) {
+    var hint=String(error && error.message || error || '');
+    if(hint.includes('ALF_DISCOVERY_MISSING:'))
+      return 'لم تظهر كل قواعد نظام ألف ضمن صلاحيات التوكن. افتح القواعد الأصلية المفقودة في Notion واختر Connections ثم أضف التكامل. '+hint.split('ALF_DISCOVERY_MISSING:')[1].slice(0,90);
+    if(hint.includes('ALF_DISCOVERY_AMBIGUOUS:'))
+      return 'وجدت أكثر من قاعدة بالاسم نفسه. لا يمكن الاختيار تلقائيًا بأمان: '+hint.split('ALF_DISCOVERY_AMBIGUOUS:')[1].slice(0,65);
+    if(hint.includes('ALF_DISCOVERY_SCHEMA:') ||
+       hint.includes('ALF_DISCOVERY_RELATION:') ||
+       hint.includes('ALF_DISCOVERY_OPTIONS:'))
+      return 'تم اكتشاف قواعد، لكن أحد الحقول أو العلاقات لا يطابق نظام ألف المعروف. لم يتم حفظ ربط قد يكون خاطئًا. '+hint.slice(0,110);
+    if(hint.includes('ALF_DISCOVERY_LIMIT:'))
+      return 'عدد قواعد البيانات التي يمكن الوصول إليها كبير جدًا؛ تم إيقاف الاكتشاف دون تخمين.';
+    if(hint.includes('Notion HTTP 401'))
+      return 'توكن Notion غير صالح أو انتهت صلاحيته. أنشئ رمز وصول جديدًا.';
+    if(hint.includes('Notion HTTP 403') || hint.includes('Notion HTTP 404'))
+      return 'تعذّر الوصول لقواعد البيانات. راجع اتصال التكامل بالقواعد الأصلية في Notion.';
+    return 'تعذر إكمال الاتصال الآمن. راجع صلاحيات Notion ثم أعد المحاولة. '+hint.replace(/(?:ntn_|secret_)[A-Za-z0-9_-]+/ig,'[redacted]').slice(0,90);
+  }
+  async function alfQuickConnect() {
+    if(active)return;
+    busy(true);
+    ui('quickReport').textContent='جاري فحص القواعد المتاحة والتحقق من حقول النظام — دون كتابة في Notion…';
+    try {
+      var freshToken=ui('quickToken').value.trim();
+      if (freshToken) {
+        // Any existing per-device writer authorization is invalidated BEFORE
+        // switching credentials, even if discovery subsequently fails.
+        await alfUiDeleteSecret(AUTO_PLAN_ENABLED_KEY);
+        await alfUiDeleteSecret(AUTO_TIME_ENABLED_KEY);
+        await alfUiDeleteSecret(AUTO_HABIT_ENABLED_KEY);
+        await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
+        await alfUiSetSecret(TOKEN_KEY,freshToken);
+        ui('quickToken').value='';
+      } else if (!await alfUiGetSecret(TOKEN_KEY)) {
+        throw new Error('Paste a Notion token first');
+      }
+      var discovery=await alfHostRpc('discover',{});
+      if(!discovery || !alfQuickReady(discovery.config))
+        throw new Error('Alf discovery returned incomplete profile');
+      // Reconnection is a new connection grant, not consent to revive
+      // previously enabled writers. Disable all writer flags even if the
+      // existing local credential is reused with no new token entered.
+      await alfUiDeleteSecret(AUTO_PLAN_ENABLED_KEY);
+      await alfUiDeleteSecret(AUTO_TIME_ENABLED_KEY);
+      await alfUiDeleteSecret(AUTO_HABIT_ENABLED_KEY);
+      await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
+      // Persist exactly one verified, automatically pinned mapping. No
+      // imported SP tasks, Notion pages, fields, or automatic flags are touched.
+      await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
+      putForm(discovery.config);
+      lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;
+      stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;
+      stagedHabitStatus=null;stagedObservedPomo=null;
+      ui('quickPreviews').hidden=false;
+      ui('quickReport').textContent='تم الربط بنجاح: اللوح، قاعدة العادات، المستويات العليا والفرعية. تم التعرف على '+String(discovery.totalFields)+' حقلًا من المخطط الأصلي. القراءة متاحة، والمزامنة التلقائية ما زالت مقفولة.';
+      message('Alf zero-configuration profile verified and saved. No Notion/SP records were changed.');
+    }catch(e) {
+      ui('quickPreviews').hidden=true;
+      ui('quickReport').textContent=alfQuickMessage(e);
+    }finally{busy(false);}
   }
   function dataSourceId(value, optional) {
     var v = String(value || '').trim();
@@ -2452,6 +2553,10 @@ code {font:inherit;white-space:nowrap}
       var autoEnabled=await alfUiGetSecret(AUTO_PLAN_ENABLED_KEY);
       var timeEnabled=await alfUiGetSecret(AUTO_TIME_ENABLED_KEY);
       var habitsEnabled=await alfUiGetSecret(AUTO_HABIT_ENABLED_KEY);
+      if (local && alfQuickReady(getForm())) {
+        ui('quickPreviews').hidden=false;
+        ui('quickReport').textContent='تم حفظ ربط نظام ألف سابقًا. اضغط اتصال لإعادة التحقق من قواعد Notion؛ لم يتم تفعيل المزامنة التلقائية.';
+      }
       ui('autoHabitsStatus').textContent=habitsEnabled==='enabled'?
         'Automatic existing habit-day Number writes ENABLED on this device (experimental).':
         'Automatic existing habit-day writes DISABLED on this device (default).';
@@ -2464,6 +2569,15 @@ code {font:inherit;white-space:nowrap}
       message(local?'Local Notion credential is present on this device. Notion data reads remain explicit or separately authorized auto-planning.':
         'No local Notion credential found. Save a token to inspect your data source.');
     } catch(e) { fail(e); }
+    ui('connectAuto').addEventListener('click',alfQuickConnect);
+    ui('quickPreviewTasks').addEventListener('click',async function(){
+      ui('advancedSettings').open=true;
+      await preview();
+    });
+    ui('quickPreviewHabits').addEventListener('click',async function(){
+      ui('advancedSettings').open=true;
+      await previewHabitDefinitions();
+    });
     ui('save').addEventListener('click',save);
     ui('disconnect').addEventListener('click',disconnect);
     ui('schemaBtn').addEventListener('click',inspect);

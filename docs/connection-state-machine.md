@@ -1,5 +1,7 @@
 # Connection State Machine Documentation
 
+> **HISTORICAL UPSTREAM MODEL — NOT THE IMPLEMENTED v0.30 STATE MACHINE.** The current Alf profile has a single-token connect action followed by host-owned paginated Notion Search and typed schema/relation validation. No multi-step user-facing wizard and no explicit source IDs. See [the current Alf discovery/refusal state machine](architecture/alf-life-os-zero-config.md). Do not use the obsolete `pluginConfig.connectionState` model described below to make claims about current code.
+
 **Document Version**: 1.0
 **Last Updated**: 2025-10-07
 **Plugin Config Version**: 1.0.1

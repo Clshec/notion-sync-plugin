@@ -1,5 +1,7 @@
 # Plugin Architecture Documentation
 
+> **LEGACY UPSTREAM DESIGN — NOT AN IMPLEMENTATION DESCRIPTION.** The old examples below of `DEFAULT_CONFIG.apiKey`, automatic page creation, generic bidirectional sync and English `Name` fields are **not the current code**. For the implemented Alf v0.30 entrypoint, security boundary, one-token UI and true current Notion schema read [the verified zero-config architecture](architecture/alf-life-os-zero-config.md). Do not implement from the old pseudocode.
+
 This document provides a comprehensive overview of the Notion Sync Plugin's architecture, code organization, and design patterns.
 
 ## Architecture Overview

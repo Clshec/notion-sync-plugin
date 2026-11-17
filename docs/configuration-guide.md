@@ -1,5 +1,7 @@
 # Configuration Guide
 
+> **LEGACY / SUPERSEDED FOR ALF v0.30.** For the Alf life-OS plugin, only install, enable and paste the Notion token; the current code discovers the four existing sources and property IDs automatically. NEVER instruct the user to create a separate Tasks/Projects database or add English sync columns. When Notion cannot see a database, use its built-in **Connections** permission setting on the original database. The authoritative current workflow is [v0.30 one-token setup](architecture/alf-life-os-zero-config.md); the detailed English setup below is retained only as historical upstream documentation.
+
 This comprehensive guide walks you through setting up and configuring the Notion Sync Plugin for optimal performance and functionality.
 
 ## Prerequisites

@@ -29,7 +29,22 @@ function alfHostNotionMethodAllowed(path, method, body) {
   const dayQuery = /^\/data_sources\/[a-f0-9-]{32,36}\/query$/i.test(path);
   const page = /^\/pages\/[a-f0-9-]{32,36}$/i.test(path);
   if (method === 'GET') return (source || page) && body === undefined;
-  if (method === 'POST') return dayQuery && body && typeof body === 'object';
+  if (method === 'POST') {
+    if (path === '/search') {
+      return !!body && typeof body === 'object' &&
+        Object.keys(body).every((key) =>
+          ['page_size','start_cursor','filter'].includes(key)) &&
+        body.filter && body.filter.property === 'object' &&
+        body.filter.value === 'data_source' &&
+        Object.keys(body.filter).length === 2 &&
+        Number.isSafeInteger(body.page_size) &&
+        body.page_size >= 1 && body.page_size <= 100 &&
+        (body.start_cursor === undefined ||
+          (typeof body.start_cursor === 'string' &&
+           body.start_cursor.length > 0 && body.start_cursor.length <= 200));
+    }
+    return dayQuery && body && typeof body === 'object';
+  }
   if (method !== 'PATCH' || !page || !body || typeof body !== 'object') return false;
   // Alf only updates exactly one existing Number or Status/Select property
   // after a separate reviewed UI action, never arbitrary Notion page content.
@@ -45,6 +60,208 @@ function alfHostNotionMethodAllowed(path, method, body) {
     (Object.keys(value).length === 1 && value.select &&
       typeof value.select.name === 'string')
   );
+}
+
+// Zero-config ALF profile. Names/types/relations are the schema contract,
+// NEVER hard-coded tenant data-source IDs. Search sees only shared sources.
+const ALF_EXPECTED_SOURCE_TITLES = Object.freeze({
+  board:'اللوح',
+  habits:'قاعدة العادات',
+  upper:'المستويات العليا',
+  lower:'المستويات الفرعية'
+});
+const ALF_TASK_PROFILE_FIELDS = Object.freeze({
+  titleProp:['المصدر','title'],
+  typeProp:['نوع الصفحة','multi_select'],
+  executionProp:['يوم التنفيذ','date'],
+  estimateProp:['الوقت المخطط له','number'],
+  actualProp:['الوقت الفعلي','number'],
+  statusProp:['Status','status'],
+  projectProp:['العنصر الفرعي','relation'],
+  parentProp:['الحزمة الأب','relation']
+});
+const ALF_HABIT_DEFINITION_FIELDS = Object.freeze({
+  habitTitleProp:['العادة','title'],
+  habitCadenceProp:['التكرار','select']
+});
+const ALF_HABIT_OCCURRENCE_FIELDS = Object.freeze({
+  habitOccTypeProp:['نوع الصفحة','multi_select'],
+  habitOccRelationProp:['قاعدة العادات','relation'],
+  habitOccDayProp:['يوم التنفيذ','date']
+});
+
+function alfNormalizeId(id) {
+  return typeof id === 'string' &&
+    /^[a-f0-9]{8}(?:-?[a-f0-9]{4}){3}-?[a-f0-9]{12}$/i.test(id) ?
+    id.replace(/-/g,'').toLowerCase() : '';
+}
+function alfSourceTitle(source) {
+  if (!source || typeof source !== 'object') return '';
+  if (typeof source.name === 'string') return source.name.trim();
+  if (Array.isArray(source.title)) return source.title.map((part) =>
+    typeof part.plain_text === 'string' ? part.plain_text :
+      part.text && typeof part.text.content === 'string' ?
+        part.text.content : '').join('').trim();
+  return '';
+}
+function alfRequiredField(schema,name,type,role) {
+  const field=schema && schema[name];
+  if (!field || field.type !== type || typeof field.id !== 'string' || !field.id)
+    throw new Error('ALF_DISCOVERY_SCHEMA: '+role+' / '+name);
+  return field;
+}
+function alfAssertRelation(field,target,role) {
+  const relation=field.relation||{};
+  const bySource=alfNormalizeId(relation.data_source_id);
+  if (bySource && bySource !== alfNormalizeId(target.id))
+    throw new Error('ALF_DISCOVERY_RELATION: '+role);
+  const byDatabase=alfNormalizeId(relation.database_id);
+  const parentDatabase=alfNormalizeId(
+    target.parent && target.parent.database_id);
+  if (byDatabase && parentDatabase && byDatabase !== parentDatabase)
+    throw new Error('ALF_DISCOVERY_RELATION: '+role);
+}
+function alfBindFields(schema,defs,sourceId,role) {
+  const values={},bindings={};
+  for (const [key,[name,type]] of Object.entries(defs)) {
+    const field=alfRequiredField(schema,name,type,role);
+    values[key]=name;
+    bindings[key]={sourceId,input:name,id:field.id};
+  }
+  return {values,bindings};
+}
+function alfAssertOptions(field,required,role) {
+  const options=field[field.type] && field[field.type].options;
+  if (Array.isArray(options)) for (const value of required) {
+    if (!options.some((opt)=>opt && opt.name === value))
+      throw new Error('ALF_DISCOVERY_OPTIONS: '+role+' / '+value);
+  }
+}
+function alfBuildProfileFromSources(sources) {
+  const ids={}, schemas={};
+  for (const [role,title] of Object.entries(ALF_EXPECTED_SOURCE_TITLES)) {
+    const source=sources[role];
+    if (!source || source.object!=='data_source' ||
+        alfSourceTitle(source)!==title || !alfNormalizeId(source.id))
+      throw new Error('ALF_DISCOVERY_SCHEMA: '+title+' source mismatch');
+    ids[role]=alfNormalizeId(source.id);
+    schemas[role]=source.properties||{};
+  }
+  const board=schemas.board,habits=schemas.habits;
+  const tasks=alfBindFields(board,ALF_TASK_PROFILE_FIELDS,ids.board,'اللوح');
+  const habitDefinitions=alfBindFields(
+    habits,ALF_HABIT_DEFINITION_FIELDS,ids.habits,'قاعدة العادات');
+  const occurrences=alfBindFields(
+    board,ALF_HABIT_OCCURRENCE_FIELDS,ids.board,'عادات اللوح');
+  // Check both project/folder hierarchies without turning knowledge into tasks.
+  for (const role of ['upper','lower']) {
+    alfRequiredField(schemas[role],'Name','title',ALF_EXPECTED_SOURCE_TITLES[role]);
+    alfRequiredField(schemas[role],'النظام' in schemas[role]?'النظام':'النوع  ',
+      role==='upper'?'select':'multi_select',ALF_EXPECTED_SOURCE_TITLES[role]);
+  }
+  alfAssertRelation(board['قاعدة العادات'],sources.habits,'اللوح → قاعدة العادات');
+  alfAssertRelation(board['العنصر الفرعي'],sources.lower,'اللوح → المستويات الفرعية');
+  alfAssertRelation(board['الحزمة الأب'],sources.board,'الحزمة الأب');
+  const back=alfRequiredField(habits,'اللوح','relation','قاعدة العادات');
+  alfAssertRelation(back,sources.board,'قاعدة العادات → اللوح');
+  const lowerParent=alfRequiredField(
+    schemas.lower,'العنصر الأب','relation','المستويات الفرعية');
+  alfAssertRelation(lowerParent,sources.upper,'المستويات الفرعية → العليا');
+  const upperChildren=alfRequiredField(
+    schemas.upper,'العناصر الفرعية','relation','المستويات العليا');
+  alfAssertRelation(upperChildren,sources.lower,'المستويات العليا → الفرعية');
+  alfAssertOptions(board['نوع الصفحة'],['مهمة','حزمة','عادة'],'نوع الصفحة');
+  alfAssertOptions(board['Status'],['Done','Not started','In progress'],'Status');
+  const config=Object.assign({
+    version:2,taskSource:ids.board,habitSource:ids.habits,
+    projectSource:ids.lower,
+    typeValues:'مهمة, حزمة',bundleValues:'حزمة',
+    completedValues:'Done',
+    // Alf current board has NO separate deadline, priority, completed
+    // Pomodoro history or numeric habit-day count. Never invent fields.
+    deadlineProp:'',priorityProp:'',priorityHigh:'',
+    priorityMedium:'',priorityLow:'',observedPomoProp:'',
+    habitOccCountProp:'',unit:'hours',pomodoroWorkMinutes:'25',
+    habitOccTypeValue:'عادة',
+    habitOccUnit:'count',
+    habitDoneStatusValue:'Done',
+    habitOpenStatusValues:'Not started, In progress',
+    taskPropertyBindings:tasks.bindings,
+    habitPropertyBindings:{
+      definitions:habitDefinitions.bindings,
+      occurrences:occurrences.bindings
+    },
+    alfProfile:{
+      name:'alf-life-os',version:1,
+      upperSource:ids.upper,lowerSource:ids.lower,
+      detectedFrom:'notion-search-and-live-schema',
+      writebackEnabled:false
+    }
+  },tasks.values,habitDefinitions.values,occurrences.values);
+  return {
+    config,
+    names:Object.values(ALF_EXPECTED_SOURCE_TITLES),
+    totalFields:Object.keys(tasks.bindings).length+
+      Object.keys(habitDefinitions.bindings).length+
+      Object.keys(occurrences.bindings).length
+  };
+}
+
+async function alfDiscoverProfile(api) {
+  const token=await api.getSecret('alf-notion-token');
+  if (!token) throw new Error('Save a local Notion token first');
+  const headers={
+    Authorization:'Bearer '+token,'Notion-Version':'2026-03-11',
+    'Content-Type':'application/json'
+  };
+  async function request(path,method,body){
+    const opts={method,headers,timeout:30000,responseType:'json'};
+    if(body!==undefined)opts.body=body;
+    return await api.request('https://api.notion.com/v1'+path,opts);
+  }
+  const candidates=[],seen=new Set();
+  let cursor=null,finished=false;
+  for(let page=0;page<5;page++){
+    const body={
+      page_size:100,filter:{property:'object',value:'data_source'}
+    };
+    if(cursor)body.start_cursor=cursor;
+    const response=await request('/search','POST',body);
+    if(!response || !Array.isArray(response.results))
+      throw new Error('ALF_DISCOVERY_RESPONSE: invalid Notion search result');
+    for(const item of response.results){
+      if(!item || item.object!=='data_source' || !alfNormalizeId(item.id))
+        continue;
+      const id=alfNormalizeId(item.id);
+      if(!seen.has(id)){seen.add(id);candidates.push(item);}
+    }
+    if(!response.has_more){finished=true;break;}
+    if(typeof response.next_cursor!=='string'||!response.next_cursor||
+       response.next_cursor===cursor)
+      throw new Error('ALF_DISCOVERY_RESPONSE: missing search cursor');
+    cursor=response.next_cursor;
+  }
+  if(!finished)throw new Error('ALF_DISCOVERY_LIMIT: inventory exceeds 500 sources');
+  const found={},missing=[];
+  for(const [role,title] of Object.entries(ALF_EXPECTED_SOURCE_TITLES)){
+    const matches=candidates.filter((item)=>alfSourceTitle(item)===title);
+    if(matches.length>1)throw new Error('ALF_DISCOVERY_AMBIGUOUS: '+title);
+    if(!matches.length){missing.push(title);continue;}
+    const id=alfNormalizeId(matches[0].id);
+    const source=await request('/data_sources/'+id,'GET');
+    if(!source || alfNormalizeId(source.id)!==id ||
+       !source.properties || typeof source.properties!=='object')
+      throw new Error('ALF_DISCOVERY_SCHEMA: '+title+' unavailable');
+    // Some Notion versions omit a data-source title on Retrieve; Search
+    // supplies the unambiguous authoritative name in that case.
+    found[role]=Object.assign({},source,{
+      title:alfSourceTitle(source) ? source.title : matches[0].title,
+      name:alfSourceTitle(source)||alfSourceTitle(matches[0])
+    });
+  }
+  if(missing.length)
+    throw new Error('ALF_DISCOVERY_MISSING: '+missing.join('، '));
+  return alfBuildProfileFromSources(found);
 }
 
 function alfCreateHostRpcHandler(api, doc) {
@@ -76,6 +293,10 @@ function alfCreateHostRpcHandler(api, doc) {
           await api.deleteSecret(args.key);
           value = true;
         }
+      } else if (req.op === 'discover') {
+        if (Object.keys(args).length)
+          throw new Error('Unsupported Alf discovery options');
+        value=await alfDiscoverProfile(api);
       } else if (req.op === 'notion') {
         const method = args.method || 'GET';
         if (!alfHostNotionMethodAllowed(args.path, method, args.body))
@@ -101,7 +322,8 @@ function alfCreateHostRpcHandler(api, doc) {
         (String(e && e.message || '').startsWith('Notion request outside') ||
          String(e && e.message || '').startsWith('Save a local Notion') ||
          String(e && e.message || '').startsWith('Unsupported Alf') ||
-         String(e && e.message || '').startsWith('Invalid local secret') ?
+         String(e && e.message || '').startsWith('Invalid local secret') ||
+         String(e && e.message || '').startsWith('ALF_DISCOVERY_') ?
           String(e.message) : 'Alf local operation failed; check Notion/API connectivity');
     }
     try {
