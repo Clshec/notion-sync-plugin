@@ -580,6 +580,44 @@ test('Notion habit definitions are previewed against existing SP counters with n
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
 });
 
+test('unique exact-name habit/counter suggestions are preview-only and require explicit Save',async()=>{
+  const defs=[
+    {object:'page',id:'h1',properties:{'العادة':{type:'title',title:[{plain_text:'  READ   20M  '}]}}},
+    {object:'page',id:'h2',properties:{'العادة':{type:'title',title:[{plain_text:'Practice'}]}}}
+  ];
+  const env=mount(null,defs);
+  await new Promise(resolve=>setImmediate(resolve));
+  env.els('habitSource').value=env.habitId;
+  env.els('habitTitleProp').value='العادة';
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewHabits').events.click();
+  const rows=env.els('habitRows').children;
+  assert.equal(rows[0].children[2].children[0].value,'a');
+  assert.equal(rows[1].children[2].children[0].value,'b');
+  assert.match(env.els('habitReport').textContent,/2 unique exact-name suggestions/);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-')).length,0);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  await env.els('saveHabitMappings').events.click();
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-')).length,2);
+});
+
+test('duplicate habit titles never get guessed counter mappings',async()=>{
+  const defs=['h1','h2'].map(id=>({object:'page',id,properties:{
+    'العادة':{type:'title',title:[{plain_text:'Read 20m'}]}
+  }}));
+  const env=mount(null,defs);
+  await new Promise(resolve=>setImmediate(resolve));
+  env.els('habitSource').value=env.habitId;
+  env.els('habitTitleProp').value='العادة';
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  await env.els('previewHabits').events.click();
+  assert.ok(!env.els('habitRows').children[0].children[2].children[0].value);
+  assert.ok(!env.els('habitRows').children[1].children[2].children[0].value);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-')).length,0);
+});
+
 test('explicit habit mapping persists only the IDs and never creates a Notion occurrence',async()=>{
   const defs=[{object:'page',id:'habit-notion-1',properties:{
     'العادة':{type:'title',title:[{plain_text:'Read daily'}]}
