@@ -257,6 +257,7 @@ code {font:inherit;white-space:nowrap}
     <button id="pinHabitProps">Pin existing habit field IDs (definitions + board occurrences)</button>
     <button id="previewHabits">Preview definitions and SP counters (NO WRITES)</button>
   </div>
+  <p class="muted"><small>Alf suggests a counter only when the existing Notion habit title and the SP counter title match exactly after safe whitespace/case normalization, and the match is unique on both sides. Suggestions are not saved until you explicitly approve the mapping. Other habits stay unlinked.</small></p>
   <p class="muted"><small>Pin existing Notion property IDs before renaming habit fields. Pins are saved only in Alf's synced mapping metadata, never in Notion. Habit-day numeric writeback now requires the occurrence count field to be pinned.</small></p>
   <div class="table-wrap">
     <table><thead><tr><th>Notion habit definition</th><th>Cadence</th><th>Existing SP counter to link</th><th>Today's local count</th></tr></thead><tbody id="habitRows"></tbody></table>
@@ -1971,6 +1972,31 @@ code {font:inherit;white-space:nowrap}
   function counterName(c) {
     return c && typeof c.title==='string' ? c.title : '';
   }
+  function habitMatchKey(value) {
+    return typeof value==='string' ?
+      value.normalize('NFKC').trim().replace(/\s+/gu,' ').toLocaleLowerCase() : '';
+  }
+  function uniqueHabitCounterSuggestions(habits,counters,c) {
+    var habitCounts=new Map(),counterCounts=new Map(),counterByKey=new Map();
+    habits.forEach(function(h){
+      var k=habitMatchKey(textValue(habitPageProperty(h,c,'habitTitleProp')));
+      if(k)habitCounts.set(k,(habitCounts.get(k)||0)+1);
+    });
+    counters.forEach(function(counter){
+      var k=habitMatchKey(counterName(counter));
+      if(k){
+        counterCounts.set(k,(counterCounts.get(k)||0)+1);
+        counterByKey.set(k,counter);
+      }
+    });
+    var result=new Map();
+    habits.forEach(function(h){
+      var k=habitMatchKey(textValue(habitPageProperty(h,c,'habitTitleProp')));
+      if(k && habitCounts.get(k)===1 && counterCounts.get(k)===1)
+        result.set(h.id,counterByKey.get(k).id);
+    });
+    return result;
+  }
   async function previewHabitDefinitions() {
     if (active) return;
     busy(true);
@@ -2004,7 +2030,10 @@ code {font:inherit;white-space:nowrap}
         if (habits.length>=150){hasMore=!!cursor;break;}
       } while(cursor);
       var today=habitLocalDay();
-      for(var habit of habits.slice(0,75)) {
+      var shownHabits=habits.slice(0,75);
+      var suggestions=uniqueHabitCounterSuggestions(habits,counters,c);
+      var suggestedCount=0;
+      for(var habit of shownHabits) {
         var row=document.createElement('tr'), p=habit.properties||{};
         appendCell(row,textValue(habitPageProperty(habit,c,'habitTitleProp')));
         var cd=habitPageProperty(habit,c,'habitCadenceProp');
@@ -2031,6 +2060,12 @@ code {font:inherit;white-space:nowrap}
             }
           } catch(e) { /* corrupt mapping simply not preselected */ }
         }
+        if (!select.value && suggestions.has(habit.id)) {
+          // Preview-only suggestion: never silently persist a new ID link.
+          select.value=suggestions.get(habit.id);
+          select.dataset.suggested='true';
+          suggestedCount++;
+        }
         holder.appendChild(select);
         row.appendChild(holder);
         var count=document.createElement('td');
@@ -2041,12 +2076,12 @@ code {font:inherit;white-space:nowrap}
         row.appendChild(count);ui('habitRows').appendChild(row);
       }
       habitPreview={sourceId:id,cfg:JSON.stringify(c),
-        ids:habits.slice(0,75).map(function(h){return h.id;}),
+        ids:shownHabits.map(function(h){return h.id;}),
         counterIds:counters.map(function(x){return x.id;})};
       ui('habitReport').textContent=habits.length+' existing Notion habit definitions read, '+
         counters.length+' existing SP SimpleCounters available. Displaying '+Math.min(habits.length,75)+
         (hasMore?'. More pages exist; this preview is capped.':'')+
-        '. Mapping changes affect only Alf metadata, never source records.';
+        '. '+suggestedCount+' unique exact-name suggestions preselected for review; click Save habit mappings to approve. No links were saved by preview. Mapping changes affect only Alf metadata, never source records.';
       message('Habit definitions and SP counters inspected. No Notion or SP changes were made.');
     }catch(e){fail(e);}
     finally{busy(false);}

@@ -1,4 +1,6 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.31 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.32 experimental)
+
+**v0.32 habit-name suggestion acceptance:** Verify that a uniquely matching Notion habit title and existing SP counter title are preselected in the review table after whitespace/case normalization. Preview MUST NOT persist links. A separate Save habit mappings action is required. Duplicate habit titles and duplicate counter titles must not be auto-selected; mismatches remain unlinked. Verify previously saved explicit ID links retain precedence. No Notion PATCH, SP counter creation, or automatic writer enablement.
 
 **Scope:** Notion is the authoritative planner and long-term habit record. Super Productivity (SP) v20.0.0+ is the local-first task executor, time tracker and focus timer. No requirement to create, migrate, rename or extend the user's existing Notion databases or fields. Use **existing** Notion task and habit data sources. No automatically created Notion pages or properties. The original repository's v14-era legacy test plan and hard-coded database IDs have been retired.
 
