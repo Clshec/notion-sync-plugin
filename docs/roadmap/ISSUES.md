@@ -4,12 +4,18 @@
 
 Notion tracking reference: https://app.notion.com/p/41ab4a624b7d81dbbc28e1c57279f725 .
 
+## P0 — Alf one-token connection and verified auto-discovery (v0.30)
+
+**Implemented in code (pending real acceptance):** one prominent Notion Access Token input, host-side paginated Notion 2026-03-11 `/search` with `filter.value=data_source`, exact names for `اللوح`, `قاعدة العادات`, `المستويات العليا`, `المستويات الفرعية`, schema/type/relations/options verification, automatic stable field-ID pinning into existing `alf-mapping-v2`, human-readable missing-permission/ambiguity messages, advanced mapper collapsed. On connect/reconnect all old device-local writer enable flags are revoked; no Notion or SP task changes. See [design contract](../architecture/alf-life-os-zero-config.md).
+
+**Not yet accepted:** actual live Notion Search from the user's token must see **all four underlying data sources**; prior v0.29 direct source GET returned 404 for board/habits and requires Notion Connections permissions/ID verification. Execute a genuine Windows SP 20 v0.30 one-token host smoke and read-only task/habit preview. Keep writes OFF; verify Android and SuperSync separately. No new Notion databases or schema changes.
+
 ## P0 — Safety: opt-in writes + credential isolation
 
 **Problem:** inherited plugin assumes English task database, auto-creates Notion pages, auto-archives on deletion, and persists Notion API key into synced config.
 
 **Done when:**
-- Default preview-only; explicit Notion sources/types/fields configured and reviewed before writes.
+- Default preview-only; the dedicated Alf user gets automatic exact-source/schema/field discovery from one token; manual mapping is advanced developer-only and every writer still requires separate authorization.
 - No automatic page creation/deletion/archive on hook or missing `SP Task ID`.
 - Per-device secrets, sanitized export, Notion host allowed via official request API, no secrets in tests/logs.
 - Migration plan for existing alpha configs, end-to-end tests.
