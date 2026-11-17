@@ -4,11 +4,11 @@
 
 Notion tracking reference: https://app.notion.com/p/41ab4a624b7d81dbbc28e1c57279f725 .
 
-## P0 — Alf one-token connection and verified auto-discovery (v0.30)
+## P0 — Alf one-token connection and verified auto-discovery (v0.30 → v0.31)
 
-**Implemented in code (pending real acceptance):** one prominent Notion Access Token input, host-side paginated Notion 2026-03-11 `/search` with `filter.value=data_source`, exact names for `اللوح`, `قاعدة العادات`, `المستويات العليا`, `المستويات الفرعية`, schema/type/relations/options verification, automatic stable field-ID pinning into existing `alf-mapping-v2`, human-readable missing-permission/ambiguity messages, advanced mapper collapsed. On connect/reconnect all old device-local writer enable flags are revoked; no Notion or SP task changes. See [design contract](../architecture/alf-life-os-zero-config.md).
+**Implemented and live read-only accepted (2026-11-17):** one prominent token field, Notion 2026-03-11 host-side `/search`, exact matching for `اللوح`, `قاعدة العادات`, `المستويات العليا`, `المستويات الفرعية`, typed relation/option checks and automatic property-ID pinning in `alf-mapping-v2`. The actual Alf integration initially had `No page access`; four original database pages were granted through Notion's Content access. Super Productivity 20.0.0 was restarted to activate the host handler; one-token connection then discovered all four sources and **13 verified field pins**. Read-only preview: 300 mixed board records (65 eligible tasks/bundles), 41 habit definitions and 4 existing SP counters. No Notion/SP record writes. See [the design contract](../architecture/alf-life-os-zero-config.md).
 
-**Not yet accepted:** actual live Notion Search from the user's token must see **all four underlying data sources**; prior v0.29 direct source GET returned 404 for board/habits and requires Notion Connections permissions/ID verification. Execute a genuine Windows SP 20 v0.30 one-token host smoke and read-only task/habit preview. Keep writes OFF; verify Android and SuperSync separately. No new Notion databases or schema changes.
+**Next validation:** v0.31 replaces the mixed 300-record preview cutoff with server-filtered task/bundle results and **75-record cursor navigation**; verify against real Notion. Keep all writer flags OFF. Safe reviewed Notion PATCH against a disposable record, Android/SuperSync, unattended task creation/import and the exact completed-Pomodoro ledger remain separate unaccepted features. No new Notion databases or schema changes.
 
 ## P0 — Safety: opt-in writes + credential isolation
 

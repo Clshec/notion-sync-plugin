@@ -1,6 +1,6 @@
-# Alf Life OS → Super Productivity: zero-configuration connection (v0.30)
+# Alf Life OS → Super Productivity: zero-configuration connection (v0.31)
 
-**Status (2026-11-17): implemented and covered by synthetic contract tests; live Notion read-only acceptance, Android and real writeback are separate gates.** This document supersedes the upstream English-schema configuration instructions for the Alf profile. The plugin remains an MIT fork of Alessio Lovato's original.
+**Status (2026-11-17): implemented, live Windows Notion read-only connection accepted for v0.30, v0.31 task preview filtering/pagination added; Android and real writeback remain separate gates.** This document supersedes the upstream English-schema configuration instructions for the Alf profile. The plugin remains an MIT fork of Alessio Lovato's original.
 
 ## Product contract — exactly one user input
 
@@ -70,9 +70,15 @@ Search is bounded to 5 pages × 100 sources; every `has_more` page must have a n
 ## Test gates and remaining engineering
 
 1. **L1 synthetic schema contract:** missing source, pagination, duplicate names, field mismatch, option mismatch, relation target mismatch, token absent, restricted search shape, no leaked credential, non-destructive single-token UI.
-2. **L3 Windows host:** actually install/enable v0.30 and click one-token Connect. Confirm saved credential is reused on this device without exposing it. This does NOT prove external integration access.
-3. **L4 Notion live read-only:** verify 4 sources returned by `/v1/search` from the user's token after Notion Connections permissions, then query sample task/habit records and check existing values. Any 404/missing source requires permission repair. **Do not claim L4 completed from synthetic tests.**
+2. **L3 Windows host:** **passed for v0.30** by actually installing and enabling in SP 20, fully restarting the host to reload `plugin.js`, clicking one-token Connect and reusing the locally saved token. Reinstalling a ZIP alone is insufficient when previous host code remains loaded.
+3. **L4 Notion live read-only:** **passed for v0.30 connection + bounded previews** after the real integration's `Content access` changed from `No page access` to four shared original database pages. Four sources, 13 original fields validated automatically; old unfiltered task preview showed 65 eligible out of 300 mixed source pages; habit preview showed 41 definition rows and 4 SP counters. No write. **v0.31 needs new live verification** for server-filtered task query and next-cursor navigation. Recheck the four sources after token rotation/permission changes.
 4. **L4 writeback**: a separate explicit review and confirmation is required before mutating *one* existing, non-critical record. Protect Notion data; production auto modes stay OFF pending accepted real tests.
 5. **L5 Android/SuperSync:** prove exact task mapping, completed Pomodoro ledger (API gap), habit and tracked time without duplication or cross-device stale writes. No cross-device production claim until tested.
 
 References: [Notion Search API](https://developers.notion.com/reference/post-search), [Retrieve Data Source](https://developers.notion.com/reference/retrieve-a-data-source), [Alf architecture base](alf-sync.md), [test plan](../../TEST_PLAN.md).
+
+## v0.31 refinement: query only task/bundle records + cursor navigation
+
+The v0.30 task preview fetched the **first 300 unfiltered pages**, a problem on an existing mixed-purpose board with thousands of records. Even with correct local `نوع الصفحة` filtering, useful task pages later in the source could be missed. v0.31 moves the existing verified allowlist into the **Notion server-side query** using the original pinned `نوع الصفحة` property ID. For `multi_select`, the OR filter uses `contains: مهمة` or `contains: حزمة`; a normal `select` uses `equals`. Only up to 75 relevant records are fetched per page, with `next_cursor` exposed as a read-only Next action. All results are independently type-checked on receipt.
+
+Next navigation replaces the displayed 75 records instead of accumulating stale selections and **revokes all previous review checkboxes for task import, planning and actual-time export**. This protects separate reviewed mutations from incorrectly reusing a prior batch's approval. A changed mapping, missing/repeated cursor or duplicated Notion page ID is refused. Each batch requests the live source schema again. This is a **read-only user experience improvement**, not proof of complete sync or permission for production writes.
