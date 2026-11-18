@@ -1,0 +1,18 @@
+name: alf-notion-regression
+
+# Project CI is self-hosted Woodpecker on Gumacu's own servers.
+# There are no Notion access tokens, live database writes, deployments,
+# Docker privileged mounts, external paid runners, or GitHub Actions.
+when:
+  - event: [push, pull_request, manual]
+
+steps:
+  syntax-and-regression:
+    image: node:22-alpine
+    commands:
+      - node --version
+      - node --check plugin.js
+      - node --check lib/field-mapping.cjs
+      - node --check test/preview-ui.test.cjs
+      - node --check test/alf-autodiscovery.test.cjs
+      - node --test test/*.test.cjs

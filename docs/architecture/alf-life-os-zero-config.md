@@ -1,4 +1,20 @@
-# Alf Life OS → Super Productivity: zero-configuration connection (v0.31)
+# Alf Life OS → Super Productivity: zero-configuration connection (v0.33)
+
+## v0.33: Daily board records, NOT definitions, drive habit execution
+
+The original **اللوح** is the single source of today's habits. Read its existing pages with `نوع الصفحة` containing `عادة` AND exact date-only `يوم التنفيذ` equal to Super Productivity's logical day. Each existing board page represents **one dated execution record**; its page ID + day + `قاعدة العادات` relation are the identity. The `قاعدة العادات` source itself holds definitions/cadence only and does not determine which habits enter SP today. No extra Notion sources, properties or rows may be created.
+
+The new quick-start habit preview queries only dated board occurrences, displays original title, day, Status, single definition Relation and a matching **existing** SP counter if unique. No Notion read of the definitions source is required for the daily execution list. A duplicate definition/day, missing/multiple relation or ambiguous title/counter match is refused rather than guessed.
+
+Notion permits mixed `نوع الصفحة` options on one page; live board inspection found both `عادة`+`مهمة` and `عادة`+`تدوين`. Alf treats those as **habit-day** records; the ordinary SP task preview/import and planning/time writers must exclude any Alf page marked `عادة`, even when also marked `مهمة`.
+
+For reviewed `Status` writeback, Alf now resolves the counter from the **daily board record title**, with unique original definition Relation and matching SP logical day. Before a PATCH it revalidates that day's original page ID, relation, current Status, counter and observed count. **A positive counter is not proof of goal completion**: user review is mandatory. The legacy definition→counter mapping remains only for non-Alf advanced scenarios. Alf's legacy definition-driven automatic Number writer is explicitly blocked, including host runtime, until a page/day-ID safe design has passed acceptance. No data writes or counter creations occur in onboarding or previews.
+
+Missing SP Habit Tracker counters are **not created** by this revision. Official SP 20 exposes get/update methods and low-level counters, but a safe end-user import/creation design with scoped approval and Android tests is a separate release gate. The documented update is a real daily-source correction and reviewed link, **not** full daily SP counter creation or cross-device habit synchronization.
+
+## Woodpecker CI — self-hosted only
+
+The repository uses [`.woodpecker.yaml`](../../.woodpecker.yaml) for Node 22 syntax and regression tests on the user's own Woodpecker service. The former GitHub Actions `mapping-tests.yml` was removed. No live Notion token is passed into CI and no CI test touches personal data. The GitHub repository must be activated in the live Woodpecker instance and a real pipeline must finish successfully before claiming self-hosted acceptance; local checks alone do not suffice.
 
 **Status (2026-11-17): implemented, live Windows Notion read-only connection accepted for v0.30, v0.31 task preview filtering/pagination added; Android and real writeback remain separate gates.** This document supersedes the upstream English-schema configuration instructions for the Alf profile. The plugin remains an MIT fork of Alessio Lovato's original.
 
