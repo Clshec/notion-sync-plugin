@@ -62,8 +62,17 @@ code {font:inherit;white-space:nowrap}
   <div id="quickPreviews" hidden>
     <div class="actions">
       <button id="quickPreviewTasks">استعراض المهام من اللوح (قراءة فقط)</button>
-      <button id="quickPreviewHabits">استعراض العادات (قراءة فقط)</button>
+      <button id="quickPreviewHabits">عادات اليوم من اللوح (قراءة فقط)</button>
     </div>
+  </div>
+  <div id="dailyHabitsPanel" hidden>
+    <h3>سجلات عادات اليوم — من اللوح مباشرة</h3>
+    <p>نعرض فقط السجلات التي نوعها «عادة» ويوم التنفيذ هو يوم Super Productivity. «قاعدة العادات» مرجع للعلاقة فقط، وليست مصدر التنفيذ.</p>
+    <div class="table-wrap">
+      <table><thead><tr><th>عادة اللوح</th><th>تاريخ التنفيذ</th><th>الحالة في Notion</th><th>عداد SP الموجود (اقتراح)</th></tr></thead><tbody id="dailyHabitRows"></tbody></table>
+    </div>
+    <p id="dailyHabitsReport" role="status" aria-live="polite" class="muted"></p>
+    <p class="muted"><small>هذه معاينة فقط: لا تنشئ عدادات أو مهام داخل Super Productivity، ولا تُغير أي سجل في Notion. الربط بين العداد والتعريف لا يتم حفظه تلقائيًا.</small></p>
   </div>
   <p class="muted"><small>لو ظهرت رسالة عن صلاحيات Notion، افتح قواعد البيانات الأصلية واختر Connections ثم أضف تكامل ألف إليها؛ لا توجد بيانات تقنية أخرى مطلوبة.</small></p>
 </section>
@@ -247,7 +256,7 @@ code {font:inherit;white-space:nowrap}
   <p id="observedPomoReport" role="status" aria-live="polite" class="muted"></p>
 </section>
 <section>
-  <h2>7. Notion habit definitions ↔ existing SP Habit Tracker</h2>
+  <h2>7. Advanced: original habit definitions (reference only) ↔ SP counters</h2>
   <p>Read your existing Notion habit definitions and show Super Productivity's existing habit counters. Link a Notion habit to an existing SP counter by exact IDs. This does not create a Notion database, a habit, an occurrence, or a counter. Habit-day sync remains a separate development step.</p>
   <div class="grid">
     <label>Habit title property (Title) <input id="habitTitleProp" placeholder="e.g. Habit / العادة"></label>
@@ -351,6 +360,7 @@ code {font:inherit;white-space:nowrap}
   var stagedTimeChanges = null;
   var stagedPlanRefresh = null;
   var habitPreview = null;
+  var dailyHabitPreview = null;
   var stagedHabitDay = null;
   var stagedHabitStatus = null;
   var stagedObservedPomo = null;
@@ -521,6 +531,8 @@ code {font:inherit;white-space:nowrap}
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
       putForm(discovery.config);
       lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;
+      dailyHabitPreview=null;
+      ui('dailyHabitsPanel').hidden=true;
       nextTaskPreviewCursor=null;ui('nextPreviewBtn').hidden=true;
       stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;
       stagedHabitStatus=null;stagedObservedPomo=null;
@@ -2187,6 +2199,100 @@ code {font:inherit;white-space:nowrap}
     if(truncated)throw new Error('More than 300 habit-day candidates; refuse truncated habit-day writes');
     return entries;
   }
+  // The *execution source* for habits is the existing daily 'عادة' row in
+  // اللوح, NOT the habit definition in قاعدة العادات. This path never
+  // creates or edits a counter, task or Notion record.
+  function uniqueDailyCounterSuggestions(occurrences,counters,c) {
+    var byTitle=new Map(),counterCounts=new Map(),counterByTitle=new Map();
+    occurrences.forEach(function(page){
+      var name=habitMatchKey(textValue(taskProperty(page,c,'titleProp')));
+      if(name)byTitle.set(name,(byTitle.get(name)||0)+1);
+    });
+    counters.forEach(function(counter){
+      var name=habitMatchKey(counterName(counter));
+      if(name){
+        counterCounts.set(name,(counterCounts.get(name)||0)+1);
+        counterByTitle.set(name,counter);
+      }
+    });
+    var matched=new Map();
+    occurrences.forEach(function(page){
+      var name=habitMatchKey(textValue(taskProperty(page,c,'titleProp')));
+      if(name&&byTitle.get(name)===1&&counterCounts.get(name)===1)
+        matched.set(page.id,counterByTitle.get(name).id);
+    });
+    return matched;
+  }
+  async function previewTodayBoardHabits() {
+    if(active)return;
+    busy(true);
+    dailyHabitPreview=null;
+    ui('dailyHabitsPanel').hidden=true;
+    ui('dailyHabitRows').replaceChildren();
+    try {
+      var c=getForm(),id=dataSourceId(c.taskSource,false);
+      if(typeof PluginAPI.getDayContext!=='function')
+        throw new Error('SP logical-day API is required for daily habits');
+      var ctx=await PluginAPI.getDayContext(),day=ctx&&ctx.todayStr;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(day||''))
+        throw new Error('SP returned an invalid logical day');
+      var source=await notion('/data_sources/'+encodeURIComponent(id));
+      var schema=source&&source.properties||{};
+      var titleField=schemaTaskProperty(schema,c,'titleProp');
+      if(!titleField||titleField.type!=='title'||!taskPropertyId(c,'titleProp'))
+        throw new Error('Existing board title field is not pinned');
+      // Reuse the already proven exact Notion date+type query and all its
+      // page ID/relation/date guards; never query habit definitions as rows.
+      var entries=await queryExistingHabitDay(c,day,id,schema,false);
+      var groups=habitDayCandidates(entries,c,day);
+      var eligible=entries.filter(function(page){
+        if(!occurrenceMatches(page,c,day))return false;
+        var def=habitRelId(page,c);
+        return !!def&&(groups.get(normalizedUUID(def)+':'+day)||[]).length===1;
+      });
+      var state=await PluginAPI.getAppState();
+      var counters=Object.values(state&&state.simpleCounters||{});
+      var suggestions=uniqueDailyCounterSuggestions(eligible,counters,c);
+      var exact=0,existing=0;
+      for(var page of eligible){
+        var defId=habitRelId(page,c),matchedId='';
+        var saved=await PluginAPI.loadSyncedData(HABIT_KEY_PREFIX+defId);
+        if(saved){
+          try {
+            var prior=JSON.parse(saved);
+            if(normalizedUUID(prior.notionId)===normalizedUUID(defId)&&
+              normalizedUUID(prior.notionSourceId)===dataSourceId(c.habitSource,false)&&
+              counters.some(function(item){return item.id===prior.spCounterId;})){
+              matchedId=prior.spCounterId;existing++;
+            }
+          }catch(_) { /* ignore malformed legacy metadata */ }
+        }
+        if(!matchedId&&suggestions.has(page.id)){
+          matchedId=suggestions.get(page.id);exact++;
+        }
+        var row=document.createElement('tr');
+        appendCell(row,textValue(taskProperty(page,c,'titleProp')));
+        appendCell(row,day);
+        appendCell(row,statusValue(taskProperty(page,c,'statusProp')));
+        var matched=counters.find(function(item){return item.id===matchedId;});
+        appendCell(row,matched?counterName(matched):'غير مرتبط');
+        ui('dailyHabitRows').appendChild(row);
+      }
+      dailyHabitPreview={sourceId:id,day:day,
+        occurrenceIds:eligible.map(function(page){return page.id;}),
+        config:JSON.stringify(c)};
+      ui('dailyHabitsReport').textContent=
+        'اللوح / '+day+': '+eligible.length+' سجل عادة يومية صالح؛ '+
+        exact+' تطابق أسماء فريد مقترح، '+existing+
+        ' ربط سابق. '+(entries.length-eligible.length)+
+        ' سجل غير مؤهل (علاقة ناقصة/مكررة أو تاريخ مختلف). المعاينة قراءة فقط.';
+      ui('dailyHabitsPanel').hidden=false;
+      message('Daily habit rows read from اللوح, not from قاعدة العادات. No writes.');
+    }catch(e){
+      dailyHabitPreview=null;
+      fail(e);
+    }finally{busy(false);}
+  }
   function habitDayCandidates(entries,c,day) {
     var grouped=new Map();
     for(var page of entries) {
@@ -2670,10 +2776,7 @@ code {font:inherit;white-space:nowrap}
       ui('advancedSettings').open=true;
       await preview();
     });
-    ui('quickPreviewHabits').addEventListener('click',async function(){
-      ui('advancedSettings').open=true;
-      await previewHabitDefinitions();
-    });
+    ui('quickPreviewHabits').addEventListener('click',previewTodayBoardHabits);
     ui('save').addEventListener('click',save);
     ui('disconnect').addEventListener('click',disconnect);
     ui('schemaBtn').addEventListener('click',inspect);

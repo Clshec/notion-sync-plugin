@@ -231,3 +231,14 @@ test('default interface is a single token field and advanced mapper is collapsed
   assert.ok(html.includes("alfHostRpc('discover',{})"));
   assert.ok(html.includes("await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY)"));
 });
+
+test('board-day habit entrypoint and Woodpecker-only CI cannot silently regress',()=>{
+  assert.ok(html.includes('id="quickPreviewHabits"'));
+  assert.ok(html.includes("addEventListener('click',previewTodayBoardHabits)"));
+  assert.match(html,/queryExistingHabitDay\(c,day,(?:id|sourceId),schema,false\)/);
+  assert.ok(html.includes('id="dailyHabitRows"'));
+  const ci=fs.readFileSync(path.join(__dirname,'..','.woodpecker.yml'),'utf8');
+  assert.match(ci,/node --test test\/\*\.test\.cjs/);
+  assert.match(ci,/image: node:22-alpine/);
+  assert.equal(fs.existsSync(path.join(__dirname,'..','.github','workflows','mapping-tests.yml')),false);
+});

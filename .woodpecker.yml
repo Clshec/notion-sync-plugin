@@ -1,0 +1,13 @@
+# All CI runs on GUMACU self-hosted Woodpecker workers.
+# No secrets, Notion mutations, privileged containers or GitHub Actions.
+when:
+  - event: [push, pull_request, manual]
+
+steps:
+  - name: alf-node-contracts
+    image: node:22-alpine
+    commands:
+      - node --version
+      - node --check plugin.js
+      - node --check lib/field-mapping.cjs
+      - node --test test/*.test.cjs

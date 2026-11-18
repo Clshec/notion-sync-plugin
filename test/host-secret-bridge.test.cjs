@@ -43,7 +43,7 @@ function mount(){
 
 test('SP 20 iframe source genuinely omits credential methods, so UI uses host bridge',()=>{
   assert.equal(manifest.minSupVersion,'20.0.0');
-  assert.equal(manifest.version,'0.32.0');
+  assert.equal(manifest.version,'0.33.0');
   assert.ok(ui.includes(marker));
   assert.ok(ui.includes("alfHostRpc('setSecret'"));
   assert.ok(ui.includes("alfHostRpc('notion'"));
