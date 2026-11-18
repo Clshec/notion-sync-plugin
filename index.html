@@ -77,6 +77,30 @@ code {font:inherit;white-space:nowrap}
     <p class="muted"><small>إنشاء عداد عبر واجهة إضافات SP 20 لا يُحفظ بعد إعادة التشغيل بسبب خطأ في مسار setCounter. العادات الجديدة تُنشأ حاليًا من شاشة Habits الأصلية، وستتعرف الإضافة عليها بالاسم الفريد دون إنشاء نسخة ثانية. لن نعتمد إنشاءً مؤقتًا على أنه مزامنة ناجحة.</small></p>
     <p class="muted"><small>العادات المطلوب تنفيذها تأتي فقط من سجلات «عادة» في اللوح بتاريخ يوم Super Productivity. «قاعدة العادات» مرجع للتعريف فقط. هذه معاينة لا تُنشئ عدادات أو تغيّر بيانات.</small></p>
   </div>
+  <div id="graphSyncSection" hidden>
+    <h3>ربط المشاريع الصغيرة والحزم والمهام</h3>
+    <p class="muted">معاينة شاملة من «المستويات العليا/الفرعية» و«اللوح». المشاريع التي تتبع مجلدات أو كورسات لا تدخل في مهام SP. الحزمة تصبح مهمة رئيسية وأبناؤها Subtasks. لا إنشاء أو تعديل تلقائي قبل نجاح الاختبارات.</p>
+    <div class="actions"><button id="graphPreviewBtn">فحص الربط الكامل (قراءة فقط)</button></div>
+    <p id="graphReport" role="status" aria-live="polite" class="muted">لم تُفحص المهام بعد.</p>
+    <pre id="graphPlan" style="white-space:pre-wrap;max-height:240px;overflow:auto"></pre>
+    <label><input type="checkbox" id="authorizeGraphApply"> أوافق على استيراد الدفعة المعروضة إلى Super Productivity فقط، دون تغيير Notion.</label>
+    <button id="graphApplyBtn">اعتماد الدفعة المراجعة في SP (حد أقصى 12 سجلًا)</button>
+    <p class="muted"><strong>الاتجاه العكسي: مهام ومشروعات SP الجديدة → Notion</strong></p>
+    <label>عند إنشاء مشروع صغير جديد في Notion، اختر مشروعه الأعلى الأصلي
+      <select id="graphUpperParent"><option value="">بدون أب — تجاهل إنشاء المشاريع الجديدة</option></select>
+    </label>
+    <label><input type="checkbox" id="authorizeGraphExport"> أوافق على إنشاء الصفحات الجديدة المعروضة داخل قواعد Notion الأصلية. لن تعاد محاولة طلبات الإنشاء ذات النتائج غير المؤكدة تجنبًا للتكرار.</label>
+    <button id="graphExportBtn">إرسال الدفعة الجديدة من SP إلى Notion (مراجعة صريحة)</button>
+    <h3>المزامنة الدورية الاختيارية للكيانات الجديدة</h3>
+    <p class="muted">بعد نجاح اختبار القراءة والكتابة على نسخ تجريبية، يمكن تفعيل فحص المشروعات والمهام الجديدة كل 10 دقائق أثناء تشغيل SP، على جهاز واحد فقط. تُحفظ الموافقة على هذا الجهاز وحده، ولا تنقلها SuperSync. لا تفعّلها على بياناتك الرسمية قبل اجتياز الاختبارات.</p>
+    <label><input type="checkbox" id="authorizeGraphAuto"> أفهم أن التفعيل يسمح بإنشاء مهام ومشروعات تلقائيًا في Notion وSP دون مراجعة كل دفعة، وأن أي طلب Notion غير مؤكد سيتوقف.</label>
+    <div class="actions">
+      <button id="graphAutoEnableBtn">تفعيل مزامنة الكيانات على هذا الجهاز</button>
+      <button id="graphAutoDisableBtn">إيقاف مزامنة الكيانات</button>
+    </div>
+    <p id="graphAutoStatus" role="status" aria-live="polite" class="muted">مغلقة افتراضيًا.</p>
+    <p class="muted"><small>سجل جلسات البومودورو الدقيق ليس له حقل مؤكد في «اللوح»، لذلك لن نختلق عددًا أو ننقل جلسات ناقصة على أنها كاملة.</small></p>
+  </div>
   <p class="muted"><small>لو ظهرت رسالة عن صلاحيات Notion، افتح قواعد البيانات الأصلية واختر Connections ثم أضف تكامل ألف إليها؛ لا توجد بيانات تقنية أخرى مطلوبة.</small></p>
 </section>
 <details id="advancedSettings" class="advanced">
@@ -364,6 +388,8 @@ code {font:inherit;white-space:nowrap}
   var stagedPlanRefresh = null;
   var habitPreview = null;
   var dailyHabitPreview = null;
+  var graphSyncPreview = null;
+  var graphReviewTruncated = false;
   var stagedHabitDay = null;
   var stagedHabitStatus = null;
   var stagedObservedPomo = null;
@@ -372,6 +398,8 @@ code {font:inherit;white-space:nowrap}
   var alfProfileMetadata = null;
   var nextTaskPreviewCursor = null;
   var TOKEN_KEY = 'alf-notion-token';
+  var GRAPH_AUTO_KEY='alf-auto-graph-local-enabled-v1';
+  var GRAPH_AUTO_PARENT_KEY='alf-auto-graph-parent-v1';
   var AUTO_PLAN_ENABLED_KEY = 'alf-auto-plan-local-enabled-v1';
   var AUTO_PLAN_ANCHOR_PREFIX = 'alf-plan-anchor-v1-';
   var AUTO_TIME_ENABLED_KEY = 'alf-auto-time-local-enabled-v1';
@@ -408,7 +436,8 @@ code {font:inherit;white-space:nowrap}
       var timeout=setTimeout(function(){
         alfHostPending.delete(id);
         reject(new Error('Alf host did not respond; no operation confirmed'));
-      },op==='discover'?90000:30000);
+      },op==='discover'?90000:
+        (op==='graphPreview'||op==='graphApply'?300000:30000));
       alfHostPending.set(id,{resolve:resolve,reject:reject,timeout:timeout});
       window.parent.postMessage({
         channel:ALF_HOST_CHANNEL,type:'request',id:id,op:op,args:args||{}
@@ -453,7 +482,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['connectAuto','quickPreviewTasks','quickPreviewHabits','createDailyCountersBtn','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['connectAuto','quickPreviewTasks','quickPreviewHabits','createDailyCountersBtn','graphPreviewBtn','graphApplyBtn','graphExportBtn','graphAutoEnableBtn','graphAutoDisableBtn','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -514,6 +543,8 @@ code {font:inherit;white-space:nowrap}
         await alfUiDeleteSecret(AUTO_TIME_ENABLED_KEY);
         await alfUiDeleteSecret(AUTO_HABIT_ENABLED_KEY);
         await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
+        await alfUiDeleteSecret(GRAPH_AUTO_KEY);
+        await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
         await alfUiSetSecret(TOKEN_KEY,freshToken);
         ui('quickToken').value='';
       } else if (!await alfUiGetSecret(TOKEN_KEY)) {
@@ -529,6 +560,8 @@ code {font:inherit;white-space:nowrap}
       await alfUiDeleteSecret(AUTO_TIME_ENABLED_KEY);
       await alfUiDeleteSecret(AUTO_HABIT_ENABLED_KEY);
       await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
+      await alfUiDeleteSecret(GRAPH_AUTO_KEY);
+      await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
       // Persist exactly one verified, automatically pinned mapping. No
       // imported SP tasks, Notion pages, fields, or automatic flags are touched.
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
@@ -536,6 +569,10 @@ code {font:inherit;white-space:nowrap}
       lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;dailyHabitPreview=null;
       ui('authorizeCreateDailyCounters').checked=false;
       ui('dailyHabitRows').replaceChildren();ui('dailyHabitsSection').hidden=true;
+      graphSyncPreview=null;graphReviewTruncated=false;
+      ui('graphSyncSection').hidden=false;
+      ui('authorizeGraphApply').checked=false;
+      ui('authorizeGraphExport').checked=false;ui('graphPlan').textContent='';
       nextTaskPreviewCursor=null;ui('nextPreviewBtn').hidden=true;
       stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;
       stagedHabitStatus=null;stagedObservedPomo=null;
@@ -570,6 +607,122 @@ code {font:inherit;white-space:nowrap}
     if(body!==undefined)opts.body=body;
     return await PluginAPI.request('https://api.notion.com/v1'+path,opts);
   }
+  async function previewProjectTaskGraph(){
+    if(active)return;
+    busy(true);
+    graphSyncPreview=null;ui('authorizeGraphApply').checked=false;
+    graphReviewTruncated=false;
+    ui('graphPlan').textContent='';
+    ui('graphSyncSection').hidden=false;
+    try{
+      var result=await alfHostRpc('graphPreview',{});
+      if(!result||!result.fingerprint||!result.totals)
+        throw new Error('Invalid graph review');
+      graphSyncPreview=result.fingerprint;
+      var ts=result.totals;
+      graphReviewTruncated=ts.reviewTruncated===true;
+      ui('graphReport').textContent='المشاريع الصغيرة الناقصة: '+ts.projects+
+        '، المهام/الحزم الناقصة: '+ts.tasks+
+        '، مشروعات SP الجديدة: '+ts.exportProjects+
+        '، مهام SP الجديدة: '+ts.exportTasks+
+        '، مهام مرتبطة لها جلسات بومودورو مرصودة: '+ts.linkedObservedPomodoroTasks+
+        '، عناصر متجاوزة: '+ts.skipped.tasks+
+        '، تعارضات: '+ts.skipped.conflicts+
+        '. المعاينة قراءة فقط، ولا يتم نقل سجلات المعرفة أو العادات.'+
+        (graphReviewTruncated?' يوجد أكثر من 40 عنصرًا في أحد الاتجاهات؛ لا يمكن تفعيل المزامنة التلقائية قبل معالجة الدفعات الكبيرة.':'');
+      var select=ui('graphUpperParent');
+      select.replaceChildren();
+      var empty=document.createElement('option');empty.value='';
+      empty.textContent='بدون أب — تجاهل إنشاء المشاريع الجديدة';
+      select.appendChild(empty);
+      (result.upperChoices||[]).forEach(function(p){
+        var option=document.createElement('option');
+        option.value=p.id;option.textContent=p.name;select.appendChild(option);
+      });
+      ui('graphPlan').textContent=
+        result.projects.map(function(x){return 'مشروع صغير: '+x.name;}).join('\n')+
+        '\n'+result.tasks.map(function(x){
+          return (x.kind==='subtask'?'Subtask: ':x.isBundle?'حزمة: ':'مهمة: ')+x.title;
+        }).join('\n')+'\n--- SP → Notion ---\n'+
+        (result.exportsProjects||[]).map(function(x){return 'مشروع SP جديد: '+x.title;}).join('\n')+
+        '\n'+(result.exportsTasks||[]).map(function(x){
+          return (x.parentSpId?'SP Subtask: ':x.isBundle?'SP Bundle: ':'SP Task: ')+x.title;
+        }).join('\n')+'\n--- Pomodoro (observed minimum only) ---\n'+
+        (result.observedFocus||[]).map(function(x){
+          return 'Notion '+x.notionId+': '+x.observedMinimum+
+            ' completed Pomodoro sessions observed (historical sessions may be missing)';
+        }).join('\n')+
+        (ts.limited?'\nسيتم تنفيذ دفعة محدودة ثم إعادة الفحص.':'');
+      message('Notion and SP graph reviewed. No data written.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function applyProjectTaskGraph(){
+    if(active)return;
+    busy(true);
+    try{
+      if(!graphSyncPreview || !ui('authorizeGraphApply').checked)
+        throw new Error('Review the original Notion task graph and approve this batch first');
+      var reviewed=graphSyncPreview;
+      graphSyncPreview=null;
+      var stats=await alfHostRpc('graphApply',{fingerprint:reviewed,mode:'import'});
+      ui('graphReport').textContent='تم استيراد '+stats.projects+
+        ' مشروع صغير و'+stats.tasks+' مهمة/حزمة، مع تخطي '+stats.skipped+
+        ' وإخفاق '+stats.errors+'. لا تغيير في Notion. افحص النتائج ثم أعد المعاينة.';
+      ui('graphPlan').textContent='';
+      message('Graph import results reported; no Notion writes.');
+    }catch(e){fail(e);}
+    finally{ui('authorizeGraphApply').checked=false;busy(false);}
+  }
+  async function exportProjectTaskGraph(){
+    if(active)return;
+    busy(true);
+    try{
+      if(!graphSyncPreview || !ui('authorizeGraphExport').checked)
+        throw new Error('Preview the two-way task graph and explicitly approve Notion page creation');
+      var fingerprint=graphSyncPreview;graphSyncPreview=null;
+      var result=await alfHostRpc('graphApply',{fingerprint,mode:'export',
+        upperParentId:ui('graphUpperParent').value||''});
+      ui('graphReport').textContent='إلى Notion: '+result.projects+
+        ' مشروعات صغيرة و'+result.tasks+' مهام/حزم. تخطينا '+result.skipped+
+        '، أخطاء '+result.errors+'، طلبات متوقفة للمراجعة '+result.pending+
+        '. لا تعيد تنفيذ محاولة مشكوك فيها؛ راجع Notion أولًا.';
+      ui('graphPlan').textContent='';
+      message('Explicit SP-to-Notion create request finished; re-preview before any further action.');
+    }catch(e){fail(e);}
+    finally{ui('authorizeGraphExport').checked=false;busy(false);}
+  }
+  async function enableProjectTaskGraphAuto(){
+    if(active)return;
+    busy(true);
+    try{
+      if(!graphSyncPreview||!ui('authorizeGraphAuto').checked)
+        throw new Error('A fresh read-only graph preview and explicit device consent are required');
+      if(graphReviewTruncated)
+        throw new Error('Graph inventory exceeds safe preview size; finish reviewed batches before enabling automation');
+      if(!await alfUiGetSecret(TOKEN_KEY))
+        throw new Error('Original Notion integration token is not configured');
+      var parent=ui('graphUpperParent').value||'';
+      if(parent)await alfUiSetSecret(GRAPH_AUTO_PARENT_KEY,parent);
+      else await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
+      await alfUiSetSecret(GRAPH_AUTO_KEY,'enabled');
+      ui('graphAutoStatus').textContent=
+        'مفعّلة على هذا الجهاز فقط. محرك الإضافة يعمل دوريًا أثناء تشغيل SP. لا تفعّل على جهاز آخر.';
+      message('Device-local graph automation enabled. No immediate Notion operation claimed.');
+    }catch(e){fail(e);}
+    finally{ui('authorizeGraphAuto').checked=false;busy(false);}
+  }
+  async function disableProjectTaskGraphAuto(){
+    if(active)return;
+    busy(true);
+    try{
+      await alfUiDeleteSecret(GRAPH_AUTO_KEY);
+      await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
+      ui('graphAutoStatus').textContent='المزامنة التلقائية للمشروعات والمهام الجديدة مغلقة على هذا الجهاز.';
+      message('Device-local graph automation disabled.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
   async function save() {
     if (active) return;
     busy(true);
@@ -592,6 +745,8 @@ code {font:inherit;white-space:nowrap}
     if (active) return;
     busy(true);
     try {
+      await alfUiDeleteSecret(GRAPH_AUTO_KEY);
+      await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
       await alfUiDeleteSecret(TOKEN_KEY);
       ui('token').value = '';
       message('Local Notion token forgotten on this device. Synced mapping configuration was preserved.');
@@ -2874,6 +3029,11 @@ code {font:inherit;white-space:nowrap}
       await previewDailyBoardHabits();
     });
     ui('createDailyCountersBtn').addEventListener('click',createReviewedDailyCounters);
+    ui('graphPreviewBtn').addEventListener('click',previewProjectTaskGraph);
+    ui('graphApplyBtn').addEventListener('click',applyProjectTaskGraph);
+    ui('graphExportBtn').addEventListener('click',exportProjectTaskGraph);
+    ui('graphAutoEnableBtn').addEventListener('click',enableProjectTaskGraphAuto);
+    ui('graphAutoDisableBtn').addEventListener('click',disableProjectTaskGraphAuto);
     ui('save').addEventListener('click',save);
     ui('disconnect').addEventListener('click',disconnect);
     ui('schemaBtn').addEventListener('click',inspect);

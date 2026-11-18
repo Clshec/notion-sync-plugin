@@ -1,6 +1,16 @@
-# Alf Life OS → Super Productivity: zero-configuration connection (v0.34 experimental)
+# Alf Life OS ↔ Super Productivity: zero-configuration connection (v0.36 experimental)
 
-## v0.34 — explicit import of missing SP daily counters (not yet live accepted)
+## v0.36 — original two-way project/task graph, NOT a new Notion schema
+
+Notion remains the source of work hierarchy, knowledge and planning. Only verified small projects with a true upper **مشروع** parent map to SP Projects. Folders/courses are explicitly excluded. Original **اللوح** **حزمة** pages map to parent SP tasks; pages referring to that original bundle in **الحزمة الأب** map to Subtasks; standalone tasks map to regular tasks, optionally SP Inbox. A page whose type includes **عادة** must remain a dated habit occurrence, not a duplicated task.
+
+The plugin links Notion pages by original IDs and SP entities by their persistent IDs. It preserves the exact hyphenated Notion page marker convention from legacy imports and stores each link in synced Alf metadata, while the token and per-device automation permission stay local. New SP-created projects require a real selected upper project in Notion; the host refuses folder parents, uncertain identities and duplicate same-title candidates. Host-owned graph reviews require a fresh full inventory and a single-use signature before explicit writes. Notion POST attempts are logged before transmission, and ambiguous results are never blindly retried.
+
+An optional automatic reconciliation engine runs only on one separately authorized device, while SP is running. It coordinates newly created work objects and scoped completion statuses, with refusal on divergent edits, incomplete scans or oversized unreviewed queues. The old independent opt-in planning and actual-time writers are not silently enabled. Pomodoro action-hook data yields only a **verified observed minimum**; no full historical session record or accepted Notion field exists yet. The real v0.36 Windows plugin installation is a smoke test, not live Notion write acceptance. All production writer flags remain OFF until safe tests and Woodpecker CI succeed.
+
+## v0.34 — withdrawn historical counter-creation experiment
+
+**This section documents obsolete behavior, not current v0.36.** Real SP v20 testing proved that new plugin-created ClickCounters made via setCounter were nonpersistent and vanished on a full restart. v0.35 and later block this path entirely; native persistent Habits UI creation is the only accepted workaround until SP exposes a safe Create API.
 
 Source of truth remains the **original dated اللوح record**. The daily preview compares its unique existing definition Relation and title against the current Super Productivity counter inventory. After the user reviews that exact day's rows, a separate checkbox and button may request local SP **ClickCounter** creation for records with no matching existing counter. No Notion page, database, property or Status is created or updated by this import. It is OFF on onboarding; only the approved foreground action can invoke it.
 
