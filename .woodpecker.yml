@@ -1,0 +1,13 @@
+# Gumacu self-hosted Woodpecker CI. No GitHub Actions for this repository.
+# Test-only, unprivileged, no credentials or live Notion writes.
+when:
+  - event: [push, pull_request, manual]
+
+steps:
+  - name: alf-contracts
+    image: node:22-alpine
+    commands:
+      - node --version
+      - node --check plugin.js
+      - node --check lib/field-mapping.cjs
+      - node --test test/*.test.cjs

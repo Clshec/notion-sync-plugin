@@ -1,4 +1,10 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.32 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.33 experimental)
+
+## v0.33 daily habit source and Woodpecker CI acceptance
+
+- **Canonical data selection:** The ordinary-user daily habit button must query **`اللوح`**, not `قاعدة العادات`. Notion server-side filters must use the existing pinned IDs for `نوع الصفحة` (`عادة`) and `يوم التنفيذ` (SP logical day). Confirm in the real plugin using the already shared original board. Do not infer daily habits from all 41 habit definitions; only original daily occurrence rows are eligible. A missing, multi-valued, or duplicate definition/day relation is refused, as are non-habit/other-day pages. No new Notion properties/databases/rows or SP counters/tasks are created.
+- **Habit execution identity:** A displayed occurrence is keyed by its original Notion page ID, original habit-definition relation and exact date. The definition remains *reference data*, never a separate task creation source. Existing unique-name counter suggestions are previews only. No writeback is enabled from this code path, and automatic writer flags stay OFF.
+- **CI:** The only repository pipeline is `.woodpecker.yml` running in **Gumacu self-hosted Woodpecker**, not `.github/workflows`. Verify its clone/agent/node test execution using an actual Woodpecker run ID and result after activating `Clshec/notion-sync-plugin` in Woodpecker. Until then, local Node regression tests are not a substitute for server CI acceptance. Do not use GitHub Actions or enable privileged runners.
 
 **v0.32 habit-name suggestion acceptance:** Verify that a uniquely matching Notion habit title and existing SP counter title are preselected in the review table after whitespace/case normalization. Preview MUST NOT persist links. A separate Save habit mappings action is required. Duplicate habit titles and duplicate counter titles must not be auto-selected; mismatches remain unlinked. Verify previously saved explicit ID links retain precedence. No Notion PATCH, SP counter creation, or automatic writer enablement.
 

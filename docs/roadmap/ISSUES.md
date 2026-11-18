@@ -1,5 +1,23 @@
 # GitHub Issues backlog (ready to file once Issues are enabled)
 
+## P0 — daily habits from `اللوح` and Woodpecker-only test policy (v0.33)
+
+The user's clarified source of truth is the **original per-day habit records
+inside `اللوح`**, NOT `قاعدة العادات` definitions. The ordinary user
+preview now queries `اللوح` via pinned `نوع الصفحة = عادة` and
+`يوم التنفيذ = current SP logical day`, checks exactly one definition
+relation and excludes duplicate day/definition records. Definitions serve
+only identity/metadata; no additional Notion DB or day record is created.
+Actual habit creation/updates in SP and real Notion writeback remain later
+acceptance gates.
+
+All future plugin PR test execution must run through the
+**Gumacu Woodpecker Server+Agent**. The obsolete GitHub Actions workflow
+is deleted; `.woodpecker.yml` is the only CI pipeline.
+The Woodpecker deployment itself was checked running, but the
+`Clshec/notion-sync-plugin` repo must be activated via its authorized
+Woodpecker GitHub connection before a real CI run can confirm success.
+
 **BLOCKED:** GitHub API returned **410: Issues has been disabled in this repository** on 2026-11-16. This fork inherited Issues disabled. Repository owner must turn on **Settings → General → Features → Issues**. The GitHub connector can create Issues but cannot toggle repository features. These records are the canonical **draft issue descriptions**, not live issues.
 
 Notion tracking reference: https://app.notion.com/p/41ab4a624b7d81dbbc28e1c57279f725 .

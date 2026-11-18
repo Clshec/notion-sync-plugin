@@ -62,8 +62,17 @@ code {font:inherit;white-space:nowrap}
   <div id="quickPreviews" hidden>
     <div class="actions">
       <button id="quickPreviewTasks">استعراض المهام من اللوح (قراءة فقط)</button>
-      <button id="quickPreviewHabits">استعراض العادات (قراءة فقط)</button>
+      <button id="quickPreviewHabits">عادات اليوم من اللوح (قراءة فقط)</button>
     </div>
+  </div>
+  <div id="dailyHabitsPanel" hidden>
+    <h3>سجلات عادات اليوم — من اللوح مباشرة</h3>
+    <p>المصدر هو السجل اليومي في اللوح الذي نوعه «عادة» ويوم تنفيذه هو يوم Super Productivity. «قاعدة العادات» مرجع للعلاقة والتعريف فقط، وليست قائمة التنفيذ اليومي.</p>
+    <div class="table-wrap">
+      <table><thead><tr><th>عادة اللوح</th><th>يوم التنفيذ</th><th>حالة Notion</th><th>عداد SP الموجود (اقتراح)</th></tr></thead><tbody id="dailyHabitRows"></tbody></table>
+    </div>
+    <p id="dailyHabitsReport" role="status" aria-live="polite" class="muted"></p>
+    <p class="muted"><small>هذه معاينة فقط: لا تنشئ عدادات أو مهام داخل Super Productivity، ولا تغيّر أي سجل في Notion أو تحفظ روابط مقترحة تلقائيًا.</small></p>
   </div>
   <p class="muted"><small>لو ظهرت رسالة عن صلاحيات Notion، افتح قواعد البيانات الأصلية واختر Connections ثم أضف تكامل ألف إليها؛ لا توجد بيانات تقنية أخرى مطلوبة.</small></p>
 </section>
@@ -248,7 +257,7 @@ code {font:inherit;white-space:nowrap}
 </section>
 <section>
   <h2>7. Notion habit definitions ↔ existing SP Habit Tracker</h2>
-  <p>Read your existing Notion habit definitions and show Super Productivity's existing habit counters. Link a Notion habit to an existing SP counter by exact IDs. This does not create a Notion database, a habit, an occurrence, or a counter. Habit-day sync remains a separate development step.</p>
+  <p>DEVELOPER REFERENCE ONLY: inspect the original habit definitions in «قاعدة العادات» for identity/metadata and review existing Super Productivity counters. This is NOT the source of today's actionable habits: the ordinary user sees today's «عادة» records from «اللوح» above. This does not create a database, occurrence or counter.</p>
   <div class="grid">
     <label>Habit title property (Title) <input id="habitTitleProp" placeholder="e.g. Habit / العادة"></label>
     <label>Habit cadence property (optional; Select) <input id="habitCadenceProp" placeholder="e.g. Frequency / التكرار"></label>
@@ -351,6 +360,7 @@ code {font:inherit;white-space:nowrap}
   var stagedTimeChanges = null;
   var stagedPlanRefresh = null;
   var habitPreview = null;
+  var dailyHabitPreview = null;
   var stagedHabitDay = null;
   var stagedHabitStatus = null;
   var stagedObservedPomo = null;
@@ -521,6 +531,8 @@ code {font:inherit;white-space:nowrap}
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
       putForm(discovery.config);
       lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;
+      dailyHabitPreview=null;
+      ui('dailyHabitsPanel').hidden=true;
       nextTaskPreviewCursor=null;ui('nextPreviewBtn').hidden=true;
       stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;
       stagedHabitStatus=null;stagedObservedPomo=null;
@@ -2187,6 +2199,98 @@ code {font:inherit;white-space:nowrap}
     if(truncated)throw new Error('More than 300 habit-day candidates; refuse truncated habit-day writes');
     return entries;
   }
+  // "اللوح" is authoritative for each actionable *day occurrence*. The
+  // definitions database is never queried to decide today's SP habits.
+  function uniqueDailyCounterSuggestions(occurrences,counters,c) {
+    var rowNames=new Map(),counterNames=new Map(),countersByName=new Map();
+    occurrences.forEach(function(page){
+      var name=habitMatchKey(textValue(taskProperty(page,c,'titleProp')));
+      if(name)rowNames.set(name,(rowNames.get(name)||0)+1);
+    });
+    counters.forEach(function(counter){
+      var name=habitMatchKey(counterName(counter));
+      if(name){
+        counterNames.set(name,(counterNames.get(name)||0)+1);
+        countersByName.set(name,counter);
+      }
+    });
+    var matches=new Map();
+    occurrences.forEach(function(page){
+      var name=habitMatchKey(textValue(taskProperty(page,c,'titleProp')));
+      if(name&&rowNames.get(name)===1&&counterNames.get(name)===1)
+        matches.set(page.id,countersByName.get(name).id);
+    });
+    return matches;
+  }
+  async function previewTodayBoardHabits() {
+    if(active)return;
+    busy(true);
+    dailyHabitPreview=null;
+    ui('dailyHabitsPanel').hidden=true;
+    ui('dailyHabitRows').replaceChildren();
+    try {
+      var c=getForm(),sourceId=dataSourceId(c.taskSource,false);
+      if(typeof PluginAPI.getDayContext!=='function')
+        throw new Error('SP logical-day API is required for daily habits');
+      var ctx=await PluginAPI.getDayContext(),day=ctx&&ctx.todayStr;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(day||''))
+        throw new Error('SP returned an invalid logical day');
+      var response=await notion('/data_sources/'+encodeURIComponent(sourceId));
+      var schema=response&&response.properties||{};
+      var titleField=schemaTaskProperty(schema,c,'titleProp');
+      if(!titleField||titleField.type!=='title'||!taskPropertyId(c,'titleProp'))
+        throw new Error('Existing board title field must be pinned');
+      var entries=await queryExistingHabitDay(c,day,sourceId,schema,false);
+      var grouped=habitDayCandidates(entries,c,day);
+      var eligible=entries.filter(function(page){
+        if(!occurrenceMatches(page,c,day))return false;
+        var definitionId=habitRelId(page,c);
+        return !!definitionId &&
+          (grouped.get(normalizedUUID(definitionId)+':'+day)||[]).length===1;
+      });
+      var state=await PluginAPI.getAppState();
+      var counters=Object.values(state&&state.simpleCounters||{});
+      var suggestions=uniqueDailyCounterSuggestions(eligible,counters,c);
+      var matchCount=0,existingCount=0;
+      for(var page of eligible) {
+        var definitionId=habitRelId(page,c),counterId='';
+        var saved=await PluginAPI.loadSyncedData(HABIT_KEY_PREFIX+definitionId);
+        if(saved){
+          try {
+            var prior=JSON.parse(saved);
+            if(normalizedUUID(prior.notionId)===normalizedUUID(definitionId)&&
+               normalizedUUID(prior.notionSourceId)===dataSourceId(c.habitSource,false)&&
+               counters.some(function(counter){return counter.id===prior.spCounterId;})){
+              counterId=prior.spCounterId;existingCount++;
+            }
+          }catch(_){ /* malformed/stale metadata cannot authorize a match */ }
+        }
+        if(!counterId&&suggestions.has(page.id)){
+          counterId=suggestions.get(page.id);matchCount++;
+        }
+        var row=document.createElement('tr');
+        appendCell(row,textValue(taskProperty(page,c,'titleProp')));
+        appendCell(row,day);
+        appendCell(row,statusValue(taskProperty(page,c,'statusProp')));
+        var matched=counters.find(function(counter){return counter.id===counterId;});
+        appendCell(row,matched?counterName(matched):'غير مرتبط');
+        ui('dailyHabitRows').appendChild(row);
+      }
+      dailyHabitPreview={
+        sourceId,day,
+        occurrenceIds:eligible.map(function(page){return page.id;}),
+        config:JSON.stringify(c)
+      };
+      ui('dailyHabitsReport').textContent=
+        'اللوح / '+day+': '+eligible.length+' سجل عادة يومية صالح؛ '+
+        matchCount+' تطابق اسم فريد مقترح، '+existingCount+
+        ' ربط سابق. '+(entries.length-eligible.length)+
+        ' سجل غير مؤهل. قراءة فقط؛ لا يوجد أي إنشاء أو تحديث.';
+      ui('dailyHabitsPanel').hidden=false;
+      message('Daily habits read from اللوح, not from قاعدة العادات; no writes.');
+    }catch(e){dailyHabitPreview=null;fail(e);}
+    finally{busy(false);}
+  }
   function habitDayCandidates(entries,c,day) {
     var grouped=new Map();
     for(var page of entries) {
@@ -2670,10 +2774,7 @@ code {font:inherit;white-space:nowrap}
       ui('advancedSettings').open=true;
       await preview();
     });
-    ui('quickPreviewHabits').addEventListener('click',async function(){
-      ui('advancedSettings').open=true;
-      await previewHabitDefinitions();
-    });
+    ui('quickPreviewHabits').addEventListener('click',previewTodayBoardHabits);
     ui('save').addEventListener('click',save);
     ui('disconnect').addEventListener('click',disconnect);
     ui('schemaBtn').addEventListener('click',inspect);

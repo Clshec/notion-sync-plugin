@@ -1,4 +1,43 @@
-# Alf Life OS → Super Productivity: zero-configuration connection (v0.31)
+# Alf Life OS → Super Productivity: zero-configuration connection (v0.33)
+
+## v0.33 execution-level correction (supersedes older habit flow diagrams)
+
+The correct Notion → SP habit execution path is:
+
+```text
+Notion: قاعدة العادات (reference definition only)
+          │ relation from each daily page
+          ▼
+Notion: اللوح
+  [نوع الصفحة = عادة] + [يوم التنفيذ = SP logical day]
+  + [قاعدة العادات = exactly one definition]
+          │ existing daily-page ID is the execution identity
+          ▼
+Super Productivity: existing Habit Tracker / SimpleCounters
+  preview today's eligible occurrences; only review unique suggestions
+          │ separate explicit write approval, if later implemented/verified
+          ▼
+Notion: update only the SAME original اللوح day-page
+```
+
+**Never** query the definitions database to decide which habits need to be
+executed today. A definition with no matching daily page in `اللوح` produces
+**no** SP daily habit. A page from yesterday cannot satisfy today. Two
+occurrences with the same definition/day are ambiguous and excluded, not
+merged. The execution identity is the source-page ID + referenced definition
+ID + logical date; counter suggestions by exact unique board title are
+non-authoritative and read-only.
+
+Current code implements an **ordinary-user read-only daily habit preview**
+using the validated board fields and pre-existing SP SimpleCounters. It does
+not assert SP Plugin API support for creating Habit Tracker counters, and
+does not activate automatic status writes. The advanced definitions preview
+remains a separate reference/diagnostic tool.
+
+**CI owner:** `.woodpecker.yml` on the Gumacu private Kubernetes Woodpecker
+cluster (self-hosted agents); the old GitHub Actions workflow is removed.
+No CI acceptance without an actual Woodpecker run. A repo must be activated
+in Woodpecker before PR/push hooks can run.
 
 **Status (2026-11-17): implemented, live Windows Notion read-only connection accepted for v0.30, v0.31 task preview filtering/pagination added; Android and real writeback remain separate gates.** This document supersedes the upstream English-schema configuration instructions for the Alf profile. The plugin remains an MIT fork of Alessio Lovato's original.
 

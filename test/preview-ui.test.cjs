@@ -580,6 +580,93 @@ test('Notion habit definitions are previewed against existing SP counters with n
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
 });
 
+test('user-facing habit preview reads today-specific عادة rows from اللوح, not definition rows',async()=>{
+  const day='2026-11-16',rows=[
+    {object:'page',id:'occ-1',properties:{
+      'المصدر':{type:'title',title:[{plain_text:'Read 20m'}]},
+      'نوع الصفحة':{type:'multi_select',multi_select:[{name:'عادة'}]},
+      'يوم التنفيذ':{type:'date',date:{start:day}},
+      'قاعدة العادات':{type:'relation',relation:[{id:'def-1'}]},
+      'Status':{type:'status',status:{name:'Not started'}}
+    }},
+    {object:'page',id:'occ-old',properties:{
+      'المصدر':{type:'title',title:[{plain_text:'Read 20m'}]},
+      'نوع الصفحة':{type:'multi_select',multi_select:[{name:'عادة'}]},
+      'يوم التنفيذ':{type:'date',date:{start:'2026-11-15'}},
+      'قاعدة العادات':{type:'relation',relation:[{id:'def-1'}]}
+    }},
+    {object:'page',id:'knowledge',properties:{
+      'المصدر':{type:'title',title:[{plain_text:'Learning'}]},
+      'نوع الصفحة':{type:'multi_select',multi_select:[{name:'تعلم'}]},
+      'يوم التنفيذ':{type:'date',date:{start:day}}
+    }}
+  ];
+  for(const page of rows)
+    for(const [name,prop] of Object.entries(page.properties))
+      prop.id='test-id-'+name;
+  const env=mount(rows);
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  env.els('habitSource').value=env.habitId;
+  for(const name of ['المصدر','نوع الصفحة','يوم التنفيذ','الوقت المخطط له','Status','قاعدة العادات'])
+    env.schema[name].id='test-id-'+name;
+  await env.els('pinProps').events.click();
+  env.els('habitOccTypeProp').value='نوع الصفحة';
+  env.els('habitOccRelationProp').value='قاعدة العادات';
+  env.els('habitOccDayProp').value='يوم التنفيذ';
+  env.els('habitOccTypeValue').value='عادة';
+  await env.els('pinHabitProps').events.click();
+  await env.els('quickPreviewHabits').events.click();
+  assert.equal(env.els('dailyHabitsPanel').hidden,false,env.els('notice').textContent);
+  const rendered=env.els('dailyHabitRows').children;
+  assert.equal(rendered.length,1);
+  assert.deepEqual(rendered[0].children.map(c=>c.textContent),
+    ['Read 20m',day,'Not started','Read 20m']);
+  const queries=env.requests.filter(x=>x.opts.method==='POST');
+  assert.equal(queries.length,1);
+  assert.ok(queries[0].url.includes('/data_sources/212b4a624b7d806989b9000b73ac11c8/query'));
+  assert.deepEqual(JSON.parse(JSON.stringify(queries[0].opts.body.filter.and[1])),
+    {property:'test-id-يوم التنفيذ',date:{equals:day}});
+  assert.match(env.els('dailyHabitsReport').textContent,/1 سجل عادة يومية/);
+  assert.equal(env.requests.some(x=>x.opts.method==='PATCH'),false);
+  assert.equal(env.imports.length,0);
+  assert.equal(env.stores.some(x=>x.key.startsWith('alf-habit-definition-link-v1-')),false);
+});
+
+test('duplicate same-day definition relation is excluded from daily execution',async()=>{
+  const rows=['occ-1','occ-2'].map(id=>({object:'page',id,properties:{
+    'المصدر':{type:'title',title:[{plain_text:'Read 20m'}]},
+    'نوع الصفحة':{type:'multi_select',multi_select:[{name:'عادة'}]},
+    'يوم التنفيذ':{type:'date',date:{start:'2026-11-16'}},
+    'قاعدة العادات':{type:'relation',relation:[{id:'def-1'}]}
+  }}));
+  for(const page of rows)
+    for(const [name,prop] of Object.entries(page.properties))
+      prop.id='test-id-'+name;
+  const env=mount(rows);
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('token').value='ntn_FAKE_PRIVATE_TOKEN';
+  await env.els('save').events.click();
+  env.els('habitSource').value=env.habitId;
+  for(const name of ['المصدر','نوع الصفحة','يوم التنفيذ','الوقت المخطط له','Status','قاعدة العادات'])
+    env.schema[name].id='test-id-'+name;
+  await env.els('pinProps').events.click();
+  env.els('habitOccTypeProp').value='نوع الصفحة';
+  env.els('habitOccRelationProp').value='قاعدة العادات';
+  env.els('habitOccDayProp').value='يوم التنفيذ';
+  env.els('habitOccTypeValue').value='عادة';
+  await env.els('pinHabitProps').events.click();
+  await env.els('quickPreviewHabits').events.click();
+  assert.equal(env.els('dailyHabitsPanel').hidden,false,env.els('notice').textContent);
+  assert.equal(env.els('dailyHabitRows').children.length,0);
+  assert.match(env.els('dailyHabitsReport').textContent,/2 سجل غير مؤهل/);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(env.imports.length,0);
+});
+
 test('unique exact-name habit/counter suggestions are preview-only and require explicit Save',async()=>{
   const defs=[
     {object:'page',id:'h1',properties:{'العادة':{type:'title',title:[{plain_text:'  READ   20M  '}]}}},

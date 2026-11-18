@@ -1,5 +1,12 @@
 # Alf Notion Super Productivity — Architecture (v0.1 proposal)
 
+> **v0.33 correction:** `قاعدة العادات` is a definition/reference catalog.
+> Only original `اللوح` rows with `نوع الصفحة = عادة` and the exact SP
+> logical execution day are an actionable habit feed. Never construct SP
+> daily habits from definitions alone. CI is Woodpecker on Gumacu servers;
+> GitHub Actions is not the test executor. See
+> [current life-OS contract](alf-life-os-zero-config.md).
+
 > **Current implemented Alf-onboarding architecture is [v0.31 zero-config](alf-life-os-zero-config.md).** This historical v0.1 proposal described generic manual mapping. In the product's actual Alf life-OS mode, the user supplies **only a Notion Access Token** and the plugin discovers/validates four named existing sources and pins original fields automatically. Never follow the old instruction below to ask the user for UUIDs or create a new Notion database. Automatic writes remain separately OFF by default.
 
 **Status:** foundation specification, not a claim of working synchronization.  
