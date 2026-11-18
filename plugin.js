@@ -170,21 +170,17 @@ async function alfCreateReviewedDailyCounter(api,args) {
   const existing=all.find(x=>x&&x.id===counterId);
   if(existing&&existing.type!=='ClickCounter')
     throw new Error('Reserved counter ID belongs to a different counter type');
-  if(existing&&existing.title!==counterId)
-    return {counterId,created:false}; // never rename or reset an existing user counter
-  if(!existing){
-    // Recheck immediately before the only create-if-missing SP operation.
-    // setCounter() is an UPSERT and would reset an existing counter.
-    if(typeof api.getSimpleCounter!=='function')
-      throw new Error('SP single-counter preflight unavailable');
-    const latest=await api.getSimpleCounter(counterId);
-    if(latest)throw new Error('Counter appeared during review; refresh first');
-    await api.setCounter(counterId,0);
-  }
-  // If a previous attempt created but failed to rename, retry only the name
-  // and never reset today's existing count.
-  await api.updateSimpleCounter(counterId,{title:args.title});
-  return {counterId,created:!existing};
+  // SP 20's setCounter() creates missing counters via the NON-PERSISTENT
+  // upsertSimpleCounter action. That briefly looks successful, but the new
+  // counter disappears after op-log hydration / SuperSync restart. Creating
+  // one here is DATA LOSS, not a usable sync. Only native Habits UI uses the
+  // persistent addSimpleCounter action; it can then be matched by unique name.
+  // Never issue a non-persistent create, even with explicit checkbox consent.
+  if(!existing)
+    throw new Error('SP 20 counter creation is non-persistent; use native Habits and re-preview');
+  if(existing.title!==args.title)
+    throw new Error('Reserved SP counter title differs; no rename permitted');
+  return {counterId,created:false};
 }
 
 // Zero-config ALF profile. Names/types/relations are the schema contract,

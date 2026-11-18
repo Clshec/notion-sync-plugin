@@ -1,7 +1,7 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
   "description": "Notion-first opt-in planning/time/habit sync with exact task ID links and scoped consent (experimental)",
@@ -25,10 +25,7 @@
     "updateTask",
     "listSyncedDataKeys",
     "getAppState",
-    "getAllSimpleCounters",
-    "getSimpleCounter",
-    "setCounter",
-    "updateSimpleCounter"
+    "getAllSimpleCounters"
   ],
   "allowedHosts": [
     "api.notion.com"

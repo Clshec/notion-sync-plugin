@@ -78,26 +78,21 @@ function fixture(options={}){
   return {api,args,log,counters};
 }
 
-test('reviewed original daily board page creates one deterministic SP counter, never Notion pages',async()=>{
+test('SP 20 missing-counter creation fails closed: setCounter upsert is NOT persisted',async()=>{
   const f=fixture();
-  const result=await create(f.api,f.args);
-  assert.equal(result.created,true);
-  assert.equal(result.counterId,counterId);
-  assert.deepEqual(f.log.filter(x=>x[0]==='set'),[['set',counterId,0]]);
-  assert.deepEqual(f.log.filter(x=>x[0]==='update'),[['update',counterId,title]]);
-  assert.equal(f.counters.get(counterId).title,title);
+  await assert.rejects(()=>create(f.api,f.args),/non-persistent/);
+  assert.equal(f.counters.has(counterId),false);
+  assert.equal(f.log.filter(x=>['set','update'].includes(x[0])).length,0);
   assert.equal(f.log.filter(x=>x[0]==='notion'&&x[2]==='PATCH').length,0);
 });
 
-test('retry does not zero or rename an existing SP habit counter',async()=>{
-  const f=fixture();
-  await create(f.api,f.args);
-  f.counters.get(counterId).countOnDay[day]=4;
-  const retry=await create(f.api,f.args);
-  assert.equal(retry.created,false);
+test('reviewing an already-existing matching counter is read-only and preserves count',async()=>{
+  const f=fixture({counter:{id:counterId,title,type:'ClickCounter',countOnDay:{[day]:4}}});
+  const result=await create(f.api,f.args);
+  assert.equal(result.created,false);
+  assert.equal(result.counterId,counterId);
   assert.equal(f.counters.get(counterId).countOnDay[day],4);
-  assert.equal(f.log.filter(x=>x[0]==='set').length,1);
-  assert.equal(f.log.filter(x=>x[0]==='update').length,1);
+  assert.equal(f.log.filter(x=>['set','update'].includes(x[0])).length,0);
 });
 
 test('stale day, changed page title and duplicated original day relation all refuse local writes',async()=>{

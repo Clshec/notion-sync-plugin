@@ -641,9 +641,23 @@ test('daily SP counter import cannot run before explicit checkbox approval',asyn
   ],true);
   await env.els('quickPreviewHabits').events.click();
   await env.els('createDailyCountersBtn').events.click();
-  assert.match(env.els('notice').textContent,/approve missing counters first/);
+  assert.match(env.els('notice').textContent,/approve the read-only recheck first/);
   assert.equal(env.els('authorizeCreateDailyCounters').checked,false);
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('approved recheck of a missing daily counter cannot write an ephemeral SP counter',async()=>{
+  const env=await dailyBoardPreviewEnv([
+    aDailyBoardRow('new-day-row','Unique new daily habit','2026-11-16',
+      '11111111111141118111111111111111')
+  ],true);
+  await env.els('quickPreviewHabits').events.click();
+  env.els('authorizeCreateDailyCounters').checked=true;
+  await env.els('createDailyCountersBtn').events.click();
+  assert.match(env.els('dailyHabitsReport').textContent,/setCounter/);
+  assert.equal(env.imports.length,0);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(env.els('authorizeCreateDailyCounters').checked,false);
 });
 
 test('daily counter importer rejects stale SP day before any SP host request',async()=>{

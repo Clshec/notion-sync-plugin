@@ -72,8 +72,9 @@ code {font:inherit;white-space:nowrap}
       <thead><tr><th>سجل اللوح</th><th>يوم التنفيذ</th><th>حالة Notion</th><th>مرجع العادة</th><th>عداد SP الموجود</th><th>نشاط اليوم</th></tr></thead>
       <tbody id="dailyHabitRows"></tbody>
     </table></div>
-    <label><input type="checkbox" id="authorizeCreateDailyCounters"> أوافق على إنشاء عدادات ClickCounter الناقصة فقط بعد مراجعة سجلات اليوم المعروضة. لن تتغير بيانات Notion.</label>
-    <button id="createDailyCountersBtn">إنشاء العدادات الناقصة من سجلات اليوم (مراجعة صريحة)</button>
+    <label><input type="checkbox" id="authorizeCreateDailyCounters"> أوافق على إعادة فحص ربط العادات مع عدادات SP الحالية، بدون إنشاء أو كتابة.</label>
+    <button id="createDailyCountersBtn">التحقق من ربط العادات الحالية (قراءة فقط)</button>
+    <p class="muted"><small>إنشاء عداد عبر واجهة إضافات SP 20 لا يُحفظ بعد إعادة التشغيل بسبب خطأ في مسار setCounter. العادات الجديدة تُنشأ حاليًا من شاشة Habits الأصلية، وستتعرف الإضافة عليها بالاسم الفريد دون إنشاء نسخة ثانية. لن نعتمد إنشاءً مؤقتًا على أنه مزامنة ناجحة.</small></p>
     <p class="muted"><small>العادات المطلوب تنفيذها تأتي فقط من سجلات «عادة» في اللوح بتاريخ يوم Super Productivity. «قاعدة العادات» مرجع للتعريف فقط. هذه معاينة لا تُنشئ عدادات أو تغيّر بيانات.</small></p>
   </div>
   <p class="muted"><small>لو ظهرت رسالة عن صلاحيات Notion، افتح قواعد البيانات الأصلية واختر Connections ثم أضف تكامل ألف إليها؛ لا توجد بيانات تقنية أخرى مطلوبة.</small></p>
@@ -2105,10 +2106,9 @@ code {font:inherit;white-space:nowrap}
   async function createReviewedDailyCounters() {
     if(active)return;
     busy(true);
-    var created=0,failed=0;
     try {
       if(!ui('authorizeCreateDailyCounters').checked)
-        throw new Error('Review the daily board rows and approve missing counters first');
+        throw new Error('Review the daily board rows and approve the read-only recheck first');
       var c=getForm(),prior=dailyHabitPreview;
       if(!c.alfProfile || c.alfProfile.name!=='alf-life-os' ||
          !prior||prior.config!==JSON.stringify(c)||
@@ -2156,21 +2156,9 @@ code {font:inherit;white-space:nowrap}
         ui('dailyHabitsReport').textContent='كل سجلات اليوم لها عدادات موجودة أو مرتبطة؛ لا حاجة لإنشاء عدادات.';
         return;
       }
-      // Host independently re-reads original Notion page + ALL daily rows
-      // before each local counter creation. No Notion PATCH or task import.
-      for(var entry of missing) {
-        try {
-          await alfHostRpc('createDailyCounter',{pageId:entry.pageId,
-            definitionId:entry.definitionId,day:prior.day,title:entry.title});
-          created++;
-        }catch(e) {
-          failed++;
-        }
-      }
       ui('dailyHabitsReport').textContent=
-        'طلب إنشاء '+missing.length+' عداد من السجلات الحالية: '+
-        created+' تم تأكيدها، '+failed+
-        ' تعذر التحقق منها. اعرض عادات اليوم مجددًا للتأكد. لم تتغير بيانات Notion.';
+        'تأكدنا من '+matches.length+' سجل في اللوح. هناك '+missing.length+
+        ' عادة دون عداد SP مطابق. لن أنشئ عدادات مؤقتة: واجهة setCounter في SP 20 لا تحفظ الإنشاء بعد إعادة التشغيل. الإنشاء الدائم يتم من شاشة Habits الأصلية؛ أعد معاينة اللوح بعد وجود العداد لتطابقه الإضافة تلقائيًا. لم تتغير بيانات Notion.';
     }catch(e){fail(e);}
     finally{
       dailyHabitPreview=null;
