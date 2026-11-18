@@ -624,7 +624,10 @@ function alfAutoPlanSpec(c) {
     if (input[key] && !ids[key])
       throw new Error('Stable task property ID required for automatic planning: ' + key);
   }
-  return {sourceId, input, ids, unit:c.unit, allowed};
+  const spec={sourceId, input, ids, unit:c.unit, allowed};
+  if(c.alfProfile && c.alfProfile.name==='alf-life-os')
+    spec.excludedHabit=c.habitOccTypeValue||'عادة';
+  return spec;
 }
 function alfAutoProp(schemaOrPage, id) {
   if (!id) return null;
@@ -691,6 +694,7 @@ function alfAutoAllowedType(page, spec) {
   const values = field.type === 'multi_select'
     ? (field.multi_select || []).map(x => x.name)
     : field.type === 'select' && field.select ? [field.select.name] : [];
+  if(spec.excludedHabit && values.includes(spec.excludedHabit))return false;
   return values.some(value => spec.allowed.includes(value));
 }
 function alfAutoCurrentPlan(task) {
@@ -886,7 +890,10 @@ function alfAutoTimeSpec(c) {
   if(c.observedPomoProp && (c.actualProp===c.observedPomoProp ||
       (observedId&&observedId===actualId)))
     throw new Error('Actual tracked time and observed Pomodoro count cannot share a Notion Number property');
-  return {sourceId,typeId,actualId,unit:c.unit,allowed};
+  const spec={sourceId,typeId,actualId,unit:c.unit,allowed};
+  if(c.alfProfile && c.alfProfile.name==='alf-life-os')
+    spec.excludedHabit=c.habitOccTypeValue||'عادة';
+  return spec;
 }
 function alfAutoTimeValue(ms,unit) {
   if(!Number.isSafeInteger(ms)||ms<=0)return null;
@@ -909,6 +916,7 @@ function alfAutoTimePage(page,spec,notionId) {
   const typeValues=t&&t.type==='multi_select'?
     (t.multi_select||[]).map(x=>x.name):
     t&&t.type==='select'&&t.select?[t.select.name]:[];
+  if(spec.excludedHabit && typeValues.includes(spec.excludedHabit))return null;
   if(!typeValues.some(x=>spec.allowed.includes(x)))return null;
   const actual=alfAutoProp(page,spec.actualId);
   if(!actual||actual.type!=='number')return null;
@@ -1184,7 +1192,14 @@ function alfCreateAutoHabitSync(api,options) {
     let spec,kind,day,allPages,linksById,duplicateCounters,scope,scopeRaw;
     try {
       const configRaw=await api.loadSyncedData(ALF_AUTO_PLAN_MAPPING_KEY);
-      spec=alfAutoHabitSpec(configRaw?JSON.parse(configRaw):null);
+      const config=configRaw?JSON.parse(configRaw):null;
+      // Alf's authoritative habit execution source is the dated BOARD row,
+      // not a definition. Legacy definition-based unattended writes are unsafe
+      // for this profile until a day-record-id based reconciliation is proven.
+      if(config&&config.alfProfile&&config.alfProfile.name==='alf-life-os'){
+        stats.enabled=false;stats.conflicts++;return stats;
+      }
+      spec=alfAutoHabitSpec(config);
       // Synced approval history is NOT a device grant. Only the latest
       // local scope explicitly reviewed on THIS device permits a write.
       scopeRaw=await api.getSecret(ALF_AUTO_HABIT_DEVICE_SCOPE_KEY);

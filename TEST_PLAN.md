@@ -1,4 +1,6 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.32 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.33 experimental)
+
+**v0.33 daily habit and CI contract:** The default habit preview reads original **اللوح** day records, not all definitions. Filter by Notion `نوع الصفحة` containing `عادة` and exact `يوم التنفيذ` equal to the SP logical day. Validate original page ID, single definition Relation, uniqueness of definition/day, and unique existing SP counter match by that day's *board title*. Mixed `عادة`+`مهمة` pages must never enter task preview/import or background task time/planning. A reviewed existing Status plan must work without any saved definition-counter link. All Notion writeback still requires independent review and fresh validation; automatic Alf habit Number export remains disabled. **Woodpecker on Gumacu servers is the only PR/push CI runner**, and the GitHub Actions test workflow is deleted. Confirm a real Woodpecker job before treating CI as accepted.
 
 **v0.32 habit-name suggestion acceptance:** Verify that a uniquely matching Notion habit title and existing SP counter title are preselected in the review table after whitespace/case normalization. Preview MUST NOT persist links. A separate Save habit mappings action is required. Duplicate habit titles and duplicate counter titles must not be auto-selected; mismatches remain unlinked. Verify previously saved explicit ID links retain precedence. No Notion PATCH, SP counter creation, or automatic writer enablement.
 

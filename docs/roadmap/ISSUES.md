@@ -4,6 +4,14 @@
 
 Notion tracking reference: https://app.notion.com/p/41ab4a624b7d81dbbc28e1c57279f725 .
 
+## P0 — v0.33: original board's DAILY habits + Woodpecker-only CI
+
+**Implemented in this branch:** quick button now reads only original `اللوح` rows with `نوع الصفحة` containing `عادة` and date-only `يوم التنفيذ` equal to SP logical day. The daily record's page ID, date and exactly one `قاعدة العادات` Relation provide identity. Match an existing SP counter by the *board-day title* only when unique. The definitions database is no longer the daily execution feed; the optional old definition preview is Advanced-only. Mixed habit/task page is excluded from all Alf task import and automatic task/time engines. Reviewed habit Status staging uses daily board name/counter with fresh checks, without requiring manually saved definition links. Old definition-based Alf background Number export blocked.
+
+**CI migration:** `.woodpecker.yaml` added (Node 22 synthetic regression suite) and GitHub Actions workflow deleted. Self-hosted Woodpecker server/agent pods are running in `gumacu-ci` on Netcup. **Intentional security boundary:** public `ci.gumacu.com` returns 404 because the CI UI is private; signed GitHub webhooks reach `api.gumacu.com/api/hook` only. Do NOT open public CI UI to troubleshoot this. **Acceptance pending:** authenticate via approved private management path, activate the GitHub repo with its signed webhook and record a successful real Woodpecker run; do not treat local tests as server CI.
+
+**Future work:** Add scoped, non-destructive SP habit-counter creation/enablement when no existing counter matches a daily record; implement exact day-page-ID based cross-device reconciliation for status and actual habit progress; test Windows/Android and respect manually edited Status. Do not create Notion databases/properties/pages.
+
 ## P0 — Alf one-token connection and verified auto-discovery (v0.30 → v0.31)
 
 **Implemented and live read-only accepted (2026-11-17):** one prominent token field, Notion 2026-03-11 host-side `/search`, exact matching for `اللوح`, `قاعدة العادات`, `المستويات العليا`, `المستويات الفرعية`, typed relation/option checks and automatic property-ID pinning in `alf-mapping-v2`. The actual Alf integration initially had `No page access`; four original database pages were granted through Notion's Content access. Super Productivity 20.0.0 was restarted to activate the host handler; one-token connection then discovered all four sources and **13 verified field pins**. Read-only preview: 300 mixed board records (65 eligible tasks/bundles), 41 habit definitions and 4 existing SP counters. No Notion/SP record writes. See [the design contract](../architecture/alf-life-os-zero-config.md).

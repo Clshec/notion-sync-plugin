@@ -62,8 +62,17 @@ code {font:inherit;white-space:nowrap}
   <div id="quickPreviews" hidden>
     <div class="actions">
       <button id="quickPreviewTasks">استعراض المهام من اللوح (قراءة فقط)</button>
-      <button id="quickPreviewHabits">استعراض العادات (قراءة فقط)</button>
+      <button id="quickPreviewHabits">عادات اليوم من اللوح (قراءة فقط)</button>
     </div>
+  </div>
+  <div id="dailyHabitsSection" hidden>
+    <h3>عادات اليوم من اللوح</h3>
+    <p id="dailyHabitsReport" role="status" aria-live="polite" class="muted"></p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>سجل اللوح</th><th>يوم التنفيذ</th><th>حالة Notion</th><th>مرجع العادة</th><th>عداد SP الموجود</th><th>نشاط اليوم</th></tr></thead>
+      <tbody id="dailyHabitRows"></tbody>
+    </table></div>
+    <p class="muted"><small>العادات المطلوب تنفيذها تأتي فقط من سجلات «عادة» في اللوح بتاريخ يوم Super Productivity. «قاعدة العادات» مرجع للتعريف فقط. هذه معاينة لا تُنشئ عدادات أو تغيّر بيانات.</small></p>
   </div>
   <p class="muted"><small>لو ظهرت رسالة عن صلاحيات Notion، افتح قواعد البيانات الأصلية واختر Connections ثم أضف تكامل ألف إليها؛ لا توجد بيانات تقنية أخرى مطلوبة.</small></p>
 </section>
@@ -351,6 +360,7 @@ code {font:inherit;white-space:nowrap}
   var stagedTimeChanges = null;
   var stagedPlanRefresh = null;
   var habitPreview = null;
+  var dailyHabitPreview = null;
   var stagedHabitDay = null;
   var stagedHabitStatus = null;
   var stagedObservedPomo = null;
@@ -520,7 +530,8 @@ code {font:inherit;white-space:nowrap}
       // imported SP tasks, Notion pages, fields, or automatic flags are touched.
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
       putForm(discovery.config);
-      lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;
+      lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;dailyHabitPreview=null;
+      ui('dailyHabitRows').replaceChildren();ui('dailyHabitsSection').hidden=true;
       nextTaskPreviewCursor=null;ui('nextPreviewBtn').hidden=true;
       stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;
       stagedHabitStatus=null;stagedObservedPomo=null;
@@ -772,8 +783,7 @@ code {font:inherit;white-space:nowrap}
     }
     var rows=response.results.filter(function(page){
       if (!page || page.object!=='page' || page.in_trash===true) return false;
-      var found=typeValue(taskProperty(page,c,'typeProp'));
-      return found.some(function(t){return types.includes(t);});
+      return taskTypesAllowed(page,c,types);
     });
     if(new Set(rows.map(function(p){return p.id;})).size!==rows.length)
       throw new Error('Duplicate Notion task IDs in one page');
@@ -957,7 +967,7 @@ code {font:inherit;white-space:nowrap}
       if (!selected.length) throw new Error('Select at least one Notion task row to import');
       var allowed=String(config.typeValues||'').split(',').map(function(x){return x.trim();}).filter(Boolean);
       var entries=selected.filter(function(page){
-        return typeValue(taskProperty(page,config,'typeProp')).some(function(t){return allowed.includes(t);});
+        return taskTypesAllowed(page,config,allowed);
       });
       if (entries.length!==selected.length) throw new Error('One selected item is outside the allowed type filter');
       var existing=await PluginAPI.getTasks();
@@ -1207,8 +1217,7 @@ code {font:inherit;white-space:nowrap}
               normalizedUUID(page.parent&&page.parent.data_source_id)!==sourceId) {
             result.skipped++;result.notes.push('Notion page moved/missing: '+entry.notionId);continue;
           }
-          var types=typeValue(taskProperty(page,c,'typeProp'));
-          if(!types.some(function(t){return splitValues(c.typeValues).includes(t);})) {
+          if(!taskTypesAllowed(page,c,splitValues(c.typeValues))) {
             result.skipped++;result.notes.push('Notion task type changed: '+entry.notionId);continue;
           }
           var fresh=plannedSpFields(page,c);
@@ -1294,8 +1303,7 @@ code {font:inherit;white-space:nowrap}
               normalizedUUID(page.id)!==normalizedUUID(snapshot.id)||
               normalizedUUID(page.parent&&page.parent.data_source_id)!==spec.sourceId)
             throw new Error('Notion page moved or unavailable');
-          var types=typeValue(taskProperty(page,c,'typeProp'));
-          if(!types.some(function(t){return spec.allowed.includes(t);}))
+          if(!taskTypesAllowed(page,c,spec.allowed))
             throw new Error('Notion page type no longer selected');
           var task=await findLinkedSpTask(page.id,allTasks);
           if(!task||!activeTasks.some(function(x){return x.id===task.id;})||
@@ -1582,8 +1590,7 @@ code {font:inherit;white-space:nowrap}
             stats.skipped++;stats.errors.push('Page moved or removed: '+entry.notionId);continue;
           }
           var allowed=splitValues(c.typeValues);
-          var types=typeValue(taskProperty(page,c,'typeProp'));
-          if (!types.some(function(t){return allowed.includes(t);})) {
+          if (!taskTypesAllowed(page,c,allowed)) {
             stats.skipped++;stats.errors.push('Notion type no longer allowed: '+entry.notionId);continue;
           }
           var current=notionTimeNumber(page,c,'actualProp');
@@ -1843,7 +1850,7 @@ code {font:inherit;white-space:nowrap}
             stats.skipped++;stats.notes.push('Notion page moved/missing: '+entry.notionId);continue;
           }
           var allowed=splitValues(c.typeValues);
-          if(!typeValue(taskProperty(page,c,'typeProp')).some(function(t){return allowed.includes(t);})) {
+          if(!taskTypesAllowed(page,c,allowed)) {
             stats.skipped++;stats.notes.push('Notion item type no longer allowed: '+entry.notionId);continue;
           }
           var p=taskProperty(page,c,'observedPomoProp');
@@ -1975,6 +1982,112 @@ code {font:inherit;white-space:nowrap}
   function habitMatchKey(value) {
     return typeof value==='string' ?
       value.normalize('NFKC').trim().replace(/\s+/gu,' ').toLocaleLowerCase() : '';
+  }
+  function uniqueDailyCounterLinks(entries,c,day,counters) {
+    var eligible=entries.filter(function(p){return occurrenceMatches(p,c,day);});
+    var groups=habitDayCandidates(eligible,c,day);
+    var names=new Map(),counterNames=new Map(),byCounterName=new Map();
+    eligible.forEach(function(page){
+      var key=habitMatchKey(textValue(taskProperty(page,c,'titleProp')));
+      if(key)names.set(key,(names.get(key)||0)+1);
+    });
+    Object.values(counters||{}).forEach(function(counter){
+      var key=habitMatchKey(counterName(counter));
+      if(key){
+        counterNames.set(key,(counterNames.get(key)||0)+1);
+        byCounterName.set(key,counter);
+      }
+    });
+    var links=new Map();
+    eligible.forEach(function(page){
+      var habitId=habitRelId(page,c);
+      if(!habitId ||
+         (groups.get(normalizedUUID(habitId)+':'+day)||[]).length!==1)return;
+      var key=habitMatchKey(textValue(taskProperty(page,c,'titleProp')));
+      if(key && names.get(key)===1 && counterNames.get(key)===1)
+        links.set(page.id,byCounterName.get(key).id);
+    });
+    return links;
+  }
+  // A page with BOTH 'عادة' and 'مهمة' is a daily habit, not two SP entities.
+  function taskTypesAllowed(page,c,allowed) {
+    var types=typeValue(taskProperty(page,c,'typeProp'));
+    if(c.alfProfile && c.alfProfile.name==='alf-life-os' &&
+       types.includes(c.habitOccTypeValue||'عادة'))return false;
+    return types.some(function(type){return allowed.includes(type);});
+  }
+  async function previewDailyBoardHabits() {
+    if(active)return;
+    busy(true);
+    dailyHabitPreview=null;
+    ui('dailyHabitRows').replaceChildren();
+    ui('dailyHabitsSection').hidden=false;
+    ui('dailyHabitsReport').textContent='جاري فحص سجلات عادات اليوم من اللوح…';
+    try {
+      var c=getForm(),id=dataSourceId(c.taskSource,false);
+      if(typeof PluginAPI.getDayContext!=='function')
+        throw new Error('Super Productivity logical day unavailable');
+      var context=await PluginAPI.getDayContext(),day=context&&context.todayStr;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(day||''))
+        throw new Error('Super Productivity logical day is invalid');
+      var source=await notion('/data_sources/'+encodeURIComponent(id));
+      var schema=source&&source.properties||{};
+      validateOccurrenceMapping(schema,c,false);
+      var titleField=schemaTaskProperty(schema,c,'titleProp');
+      var statusField=schemaTaskProperty(schema,c,'statusProp');
+      if(!titleField||titleField.type!=='title'||!statusField||
+         !['status','select'].includes(statusField.type))
+        throw new Error('Existing board title/status mapping is required');
+      // Read ONLY the existing board's dated habit-day rows. No habit
+      // definition query is involved in determining today's work.
+      var entries=await queryExistingHabitDay(c,day,id,schema,false);
+      var seenPages=new Set(),matched=entries.filter(function(page){
+        if(!occurrenceMatches(page,c,day))return false;
+        if(seenPages.has(page.id))
+          throw new Error('Repeated daily habit page in Notion query');
+        seenPages.add(page.id);
+        return true;
+      });
+      var groups=habitDayCandidates(matched,c,day);
+      var app=await PluginAPI.getAppState();
+      var counters=app&&app.simpleCounters||{};
+      var links=uniqueDailyCounterLinks(matched,c,day,counters);
+      var candidates=[],ambiguous=0;
+      for(var page of matched){
+        var title=textValue(taskProperty(page,c,'titleProp'));
+        var habitId=habitRelId(page,c);
+        var uniqueRelation=!!habitId &&
+          (groups.get(normalizedUUID(habitId)+':'+day)||[]).length===1;
+        var counterId=links.get(page.id);
+        var counter=counterId&&counters[counterId];
+        if(!uniqueRelation)ambiguous++;
+        var status=statusValue(taskProperty(page,c,'statusProp'));
+        var row=document.createElement('tr');
+        appendCell(row,title||'—');
+        appendCell(row,day);
+        appendCell(row,status||'—');
+        appendCell(row,uniqueRelation?'تعريف مرتبط':'علاقة ناقصة أو مكررة');
+        appendCell(row,counter?counterName(counter):'لا يوجد عداد مطابق فريد');
+        var todayCount=counter&&counter.countOnDay&&counter.countOnDay[day];
+        appendCell(row,typeof todayCount==='number'?String(todayCount):'—');
+        ui('dailyHabitRows').appendChild(row);
+        candidates.push({pageId:page.id,day:day,
+          definitionId:uniqueRelation?habitId:null,counterId:counter&&counter.id||null,
+          title:title,status:status});
+      }
+      dailyHabitPreview={config:JSON.stringify(c),day:day,sourceId:id,
+        candidates:candidates};
+      var paired=candidates.filter(function(p){return !!p.counterId;}).length;
+      ui('dailyHabitsReport').textContent='يوم '+day+': '+matched.length+
+        ' سجل عادة فعلي باللوح، '+paired+' عداد SP مطابق من الموجود، '+
+        ambiguous+' علاقة ناقصة أو مكررة. لا إنشاء أو تغيير لأي سجل.';
+      message('Existing dated board habit records inspected. No Notion/SP writes.');
+    }catch(e){
+      dailyHabitPreview=null;
+      ui('dailyHabitRows').replaceChildren();
+      ui('dailyHabitsReport').textContent='تعذر التحقق من سجلات اليوم دون تغيير أي بيانات.';
+      fail(e);
+    }finally{busy(false);}
   }
   function uniqueHabitCounterSuggestions(habits,counters,c) {
     var habitCounts=new Map(),counterCounts=new Map(),counterByKey=new Map();
@@ -2225,6 +2338,8 @@ code {font:inherit;white-space:nowrap}
       if(!ui('authorizeAutoHabitsLocal').checked)
         throw new Error('Explicitly authorize ongoing existing Notion habit-day Number writes');
       var c=getForm(),scope=lastHabitAutoReview;
+      if(c.alfProfile&&c.alfProfile.name==='alf-life-os')
+        throw new Error('Alf daily habits originate from board day records; legacy definition-based automatic Number export is disabled');
       if(!scope || scope.config!==JSON.stringify(c) ||
          scope.sourceId!==dataSourceId(c.taskSource,false))
         throw new Error('Preview current existing habit-day rows and pin fields before enabling');
@@ -2506,8 +2621,11 @@ code {font:inherit;white-space:nowrap}
       var info=await notion('/data_sources/'+encodeURIComponent(sourceId));
       var spec=verifiedHabitStatusSpec(info.properties||{},c);
       var entries=await queryExistingHabitDay(c,day,sourceId,info.properties||{},false);
-      var groups=habitDayCandidates(entries,c,day),links=await safeHabitCounterLinks(c);
+      var groups=habitDayCandidates(entries,c,day);
       var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
+      var alfDaily=!!(c.alfProfile&&c.alfProfile.name==='alf-life-os');
+      var dailyLinks=alfDaily?uniqueDailyCounterLinks(entries,c,day,counters):null;
+      var links=alfDaily?null:await safeHabitCounterLinks(c);
       var changes=[],skipped=[];
       for(var page of entries) {
         if(!occurrenceMatches(page,c,day))continue;
@@ -2515,17 +2633,18 @@ code {font:inherit;white-space:nowrap}
         if(!habitId||(groups.get(normalizedUUID(habitId)+':'+day)||[]).length!==1){
           skipped.push('Duplicate/missing habit-day relation: '+page.id);continue;
         }
-        var link=links.byHabit.get(normalizedUUID(habitId));
-        if(!link||links.owners.get(link.spCounterId)==='ambiguous'){
+        var link=alfDaily?null:links.byHabit.get(normalizedUUID(habitId));
+        var counterId=alfDaily?dailyLinks.get(page.id):link&&link.spCounterId;
+        if(!counterId||(!alfDaily&&links.owners.get(counterId)==='ambiguous')){
           skipped.push('Missing/ambiguous counter link: '+page.id);continue;
         }
-        var n=positiveHabitUse(counters[link.spCounterId],day);
+        var n=positiveHabitUse(counters[counterId],day);
         var field=taskProperty(page,c,'statusProp'),before=statusValue(field);
         if(n===null||!field||field.id!==spec.fieldId||field.type!==spec.type||
            !spec.open.includes(before)) {
           skipped.push('No positive counter or approved unfinished Status: '+page.id);continue;
         }
-        changes.push({pageId:page.id,habitId:habitId,counterId:link.spCounterId,
+        changes.push({pageId:page.id,habitId:habitId,counterId:counterId,
           observed:n,before:before,day:day});
       }
       stagedHabitStatus={config:JSON.stringify(c),sourceId:sourceId,day:day,
@@ -2556,16 +2675,20 @@ code {font:inherit;white-space:nowrap}
       if(JSON.stringify(spec)!==JSON.stringify(plan.spec))
         throw new Error('Status mapping changed since preview');
       var rows=await queryExistingHabitDay(c,plan.day,plan.sourceId,info.properties||{},false);
-      var groups=habitDayCandidates(rows,c,plan.day),links=await safeHabitCounterLinks(c);
+      var groups=habitDayCandidates(rows,c,plan.day);
       var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
+      var alfDaily=!!(c.alfProfile&&c.alfProfile.name==='alf-life-os');
+      var dailyLinks=alfDaily?uniqueDailyCounterLinks(rows,c,plan.day,counters):null;
+      var links=alfDaily?null:await safeHabitCounterLinks(c);
       var written=0,skipped=0,notes=[];
       for(var e of plan.updates) {
         try {
           var matches=groups.get(normalizedUUID(e.habitId)+':'+plan.day)||[];
-          var link=links.byHabit.get(normalizedUUID(e.habitId));
-          if(matches.length!==1||matches[0]!==e.pageId||!link||
-             link.spCounterId!==e.counterId||
-             links.owners.get(link.spCounterId)==='ambiguous'||
+          var link=alfDaily?null:links.byHabit.get(normalizedUUID(e.habitId));
+          var counterId=alfDaily?dailyLinks.get(e.pageId):link&&link.spCounterId;
+          if(matches.length!==1||matches[0]!==e.pageId||
+             counterId!==e.counterId||
+             (!alfDaily&&links.owners.get(counterId)==='ambiguous')||
              !Object.is(positiveHabitUse(counters[e.counterId],plan.day),e.observed)) {
             skipped++;notes.push('Habit/day/counter changed: '+e.pageId);continue;
           }
@@ -2671,8 +2794,7 @@ code {font:inherit;white-space:nowrap}
       await preview();
     });
     ui('quickPreviewHabits').addEventListener('click',async function(){
-      ui('advancedSettings').open=true;
-      await previewHabitDefinitions();
+      await previewDailyBoardHabits();
     });
     ui('save').addEventListener('click',save);
     ui('disconnect').addEventListener('click',disconnect);

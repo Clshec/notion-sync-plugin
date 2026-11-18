@@ -11,12 +11,14 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const host = fs.readFileSync(path.join(root, 'plugin.js'), 'utf8');
 
-function mount(customRows, habitRows, taskPages) {
+function mount(customRows, habitRows, taskPages, initialConfig) {
   const els = new Map();
   const requests = [];
   const stores = [];
   const secretWrites = [];
   const stored = new Map();
+  if(initialConfig)
+    stored.set('alf-mapping-v2',JSON.stringify(initialConfig));
   const imports = [];
   const updates = [];
   const existingTasks = [{id:'sp1',title:'Existing SP task'}];
@@ -578,6 +580,119 @@ test('Notion habit definitions are previewed against existing SP counters with n
   assert.match(env.els('habitReport').textContent,/2 existing Notion habit definitions/);
   assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-')).length,0);
   assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+async function dailyBoardPreviewEnv(rows, alfProfile=false) {
+  const env=mount(rows,null,null,alfProfile?{
+    version:2,alfProfile:{name:'alf-life-os',version:1}
+  }:null);
+  await new Promise(resolve=>setImmediate(resolve));
+  configure(env);
+  env.els('habitOccTypeProp').value='نوع الصفحة';
+  env.els('habitOccTypeValue').value='عادة';
+  env.els('habitOccRelationProp').value='قاعدة العادات';
+  env.els('habitOccDayProp').value='يوم التنفيذ';
+  env.schema['نوع الصفحة'].id='daily-type-id';
+  env.schema['قاعدة العادات'].id='daily-rel-id';
+  env.schema['يوم التنفيذ'].id='daily-date-id';
+  env.els('token').value='ntn_SYNTHETIC_NOT_REAL';
+  await env.els('save').events.click();
+  await env.els('pinHabitProps').events.click();
+  return env;
+}
+
+function aDailyBoardRow(id,title,day,definitionId,types=['عادة']) {
+  return {object:'page',id,properties:{
+    'المصدر':{type:'title',title:[{plain_text:title}]},
+    'نوع الصفحة':{id:'daily-type-id',type:'multi_select',
+      multi_select:types.map(name=>({name}))},
+    'قاعدة العادات':{id:'daily-rel-id',type:'relation',
+      relation:definitionId?[{id:definitionId}]:[]},
+    'يوم التنفيذ':{id:'daily-date-id',type:'date',date:{start:day}},
+    'Status':{type:'status',status:{name:'Not started'}}
+  }};
+}
+
+test('quick habits read daily board rows, not definition source, with mixed type retained',async()=>{
+  const env=await dailyBoardPreviewEnv([
+    aDailyBoardRow('row1','Read 20m','2026-11-16','habitA',['عادة','مهمة']),
+    aDailyBoardRow('row2','Practice','2026-11-16','habitB'),
+    aDailyBoardRow('other-day','Read 20m','2026-11-15','habitA'),
+    aDailyBoardRow('other-type','Knowledge','2026-11-16','habitC',['تعلم'])
+  ]);
+  await env.els('quickPreviewHabits').events.click();
+  assert.equal(env.els('dailyHabitsSection').hidden,false);
+  assert.equal(env.els('dailyHabitRows').children.length,2,env.els('notice').textContent);
+  assert.equal(env.els('dailyHabitRows').children[0].children[0].textContent,'Read 20m');
+  assert.equal(env.els('dailyHabitRows').children[0].children[4].textContent,'Read 20m');
+  assert.equal(env.els('dailyHabitRows').children[1].children[4].textContent,'Practice');
+  assert.match(env.els('dailyHabitsReport').textContent,/2 سجل عادة/);
+  assert.equal(env.requests.filter(r=>r.url.endsWith(env.habitId+'/query')).length,0,
+    'definition source must never decide daily habits');
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.equal(env.imports.length,0);
+  assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-')).length,0);
+});
+
+test('duplicate daily occurrences for one habit/day stay visible but unlinked',async()=>{
+  const env=await dailyBoardPreviewEnv([
+    aDailyBoardRow('row1','Read 20m','2026-11-16','sameDef'),
+    aDailyBoardRow('row2','Read 20m','2026-11-16','sameDef')
+  ]);
+  await env.els('quickPreviewHabits').events.click();
+  assert.equal(env.els('dailyHabitRows').children.length,2,env.els('notice').textContent);
+  assert.equal(env.els('dailyHabitRows').children[0].children[3].textContent,
+    'علاقة ناقصة أو مكررة');
+  assert.equal(env.els('dailyHabitRows').children[0].children[4].textContent,
+    'لا يوجد عداد مطابق فريد');
+  assert.match(env.els('dailyHabitsReport').textContent,/2 علاقة ناقصة أو مكررة/);
+});
+
+test('Alf mixed task+habit page is excluded from SP task preview and import',async()=>{
+  const row=aDailyBoardRow('mixed-habit','Read 20m','2026-11-16','habitA',
+    ['مهمة','عادة']);
+  const env=mount([row],null,null,{
+    version:2,taskSource:'212b4a624b7d806989b9000b73ac11c8',
+    titleProp:'المصدر',typeProp:'نوع الصفحة',
+    typeValues:'مهمة, حزمة',bundleValues:'حزمة',
+    executionProp:'يوم التنفيذ',estimateProp:'الوقت المخطط له',
+    statusProp:'Status',completedValues:'Done',
+    unit:'hours',pomodoroWorkMinutes:'25',habitOccTypeValue:'عادة',
+    alfProfile:{name:'alf-life-os',version:1}
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  env.els('token').value='ntn_SYNTHETIC_NOT_REAL';
+  await env.els('save').events.click();
+  await env.els('previewBtn').events.click();
+  assert.equal(env.els('results').children.length,0,
+    'one mixed daily habit cannot also become a normal SP task');
+  assert.equal(env.imports.length,0);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+});
+
+test('Alf daily habit Status review uses existing board day and SP counter without definition mapping',async()=>{
+  const rows=[aDailyBoardRow('row1','Read 20m','2026-11-16','definitionA')];
+  rows[0].properties['المصدر'].id='title-id';
+  rows[0].properties.Status.id='status-id';
+  const env=await dailyBoardPreviewEnv(rows,true);
+  env.schema['المصدر'].id='title-id';
+  env.schema['الوقت المخطط له'].id='estimate-id';
+  env.schema.Status.id='status-id';
+  env.schema.Status.status={options:[
+    {name:'Not started'},{name:'In progress'},{name:'Done'}
+  ]};
+  env.els('habitDoneStatusValue').value='Done';
+  env.els('habitOpenStatusValues').value='Not started, In progress';
+  await env.els('pinProps').events.click();
+  assert.match(env.stores.at(-1).data,/"alfProfile"/,
+    'Alf profile must survive pinning and remain source-specific');
+  await env.els('previewHabitStatusBtn').events.click();
+  assert.match(env.els('habitStatusPlan').textContent,
+    /1 proposed EXISTING Status changes/,
+    env.els('notice').textContent);
+  assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
+  assert.equal(env.stores.filter(s=>s.key.startsWith('alf-habit-definition-link-v1-')).length,0);
+  assert.equal(env.requests.filter(r=>r.url.endsWith(env.habitId+'/query')).length,0);
 });
 
 test('unique exact-name habit/counter suggestions are preview-only and require explicit Save',async()=>{
