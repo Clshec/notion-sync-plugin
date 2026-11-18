@@ -13,7 +13,7 @@ const ALF_HOST_RPC_CHANNEL = 'alf-notion-host-rpc-v1';
 const ALF_OWN_IFRAME_MARKER =
   '<meta name="alf-plugin-owner" content="alf-notion-super-productivity">';
 const ALF_LOCAL_RPC_KEY_RE =
-  /^alf-(?:notion-token|auto-plan-local-enabled-v1|auto-time-local-enabled-v1|auto-habit-local-enabled-v1|auto-habit-local-scope-v1|auto-status-local-v1-(?:planning|time|habits))$/;
+  /^alf-(?:notion-token|auto-plan-local-enabled-v1|auto-time-local-enabled-v1|auto-habit-local-enabled-v1|auto-habit-local-scope-v1|auto-graph-local-enabled-v1|auto-graph-parent-v1|auto-status-local-v1-(?:planning|time|habits|graph))$/;
 
 function alfHostRpcOwnsSource(source, doc) {
   if (!source || !doc || typeof doc.querySelectorAll !== 'function') return false;
@@ -387,6 +387,7 @@ async function alfDiscoverProfile(api) {
 
 function alfCreateHostRpcHandler(api, doc) {
   const inflightCounters=new Set();
+  let graphReview=null;
   return async function onAlfIframeMessage(event) {
     const req = event && event.data;
     if (!req || req.channel !== ALF_HOST_RPC_CHANNEL ||
@@ -429,6 +430,31 @@ function alfCreateHostRpcHandler(api, doc) {
         }finally{
           inflightCounters.delete(target);
         }
+      } else if (req.op === 'graphPreview') {
+        if(Object.keys(args).length)throw new Error('Unsupported graph preview arguments');
+        const inventory=await alfGraphInventory(api);
+        const plan=await alfGraphPlan(api,inventory);
+        graphReview={fingerprint:plan.fingerprint,issuedAt:Date.now(),
+          inventory,plan};
+        value=alfGraphPublicReview(plan);
+      } else if (req.op === 'graphApply') {
+        if(!['import','export'].includes(args.mode) ||
+            !Object.keys(args).every(k=>['fingerprint','mode','upperParentId'].includes(k)) ||
+            args.fingerprint!==
+            (graphReview&&graphReview.fingerprint) ||
+            Date.now()-graphReview.issuedAt>5*60*1000)
+          throw new Error('A fresh graph preview is required');
+        // Single-use: a failed request must never cause blind replays.
+        const reviewed=graphReview;
+        graphReview=null;
+        const current=await alfGraphInventory(api);
+        const fresh=await alfGraphPlan(api,current);
+        if(fresh.fingerprint!==reviewed.fingerprint ||
+           fresh.signature!==reviewed.plan.signature)
+          throw new Error('Graph changed after review; no writes');
+        value=args.mode==='import'?
+          await alfGraphApplyLocal(api,current,fresh):
+          await alfGraphApplyRemote(api,current,fresh,args.upperParentId);
       } else if (req.op === 'notion') {
         const method = args.method || 'GET';
         if (!alfHostNotionMethodAllowed(args.path, method, args.body))
@@ -1517,14 +1543,752 @@ function alfCreateAutoHabitSync(api,options) {
   return {runOnce,start,stop,heartbeat};
 }
 
+// v0.36: original life-OS project/task graph. No data-source migrations.
+// The upper project/folder hierarchy remains in Notion. Only verified lower
+// projects become SP Projects; board bundles become SP parent tasks and board
+// tasks with an original bundle relation become SP subtasks. Nothing marked
+// as knowledge, learning, folders or daily habits becomes an SP task.
+const ALF_GRAPH_PROJECT_LINK_PREFIX='alf-graph-project-v1-';
+const ALF_GRAPH_MAX_ROWS=2500;
+const ALF_GRAPH_MAX_WRITES_PER_REVIEW=12;
+function alfGraphId(x){return alfNormalizeId(x);}
+function alfGraphDashedId(id){
+  const n=alfGraphId(id);
+  if(!n)return '';
+  return n.slice(0,8)+'-'+n.slice(8,12)+'-'+n.slice(12,16)+'-'+
+    n.slice(16,20)+'-'+n.slice(20);
+}
+function alfGraphTitle(p,name) {
+  const t=p&&p.properties&&p.properties[name];
+  return t&&Array.isArray(t.title) ?
+    t.title.map(x=>x.plain_text||(x.text&&x.text.content)||'').join('').trim() : '';
+}
+function alfGraphRelation(p,name) {
+  const x=p&&p.properties&&p.properties[name];
+  return x&&x.type==='relation'&&Array.isArray(x.relation)?
+    x.relation.map(v=>alfGraphId(v.id)).filter(Boolean):[];
+}
+function alfGraphKinds(p,name) {
+  const x=p&&p.properties&&p.properties[name];
+  return x&&x.type==='multi_select'&&Array.isArray(x.multi_select)?
+    x.multi_select.map(v=>v.name).filter(v=>typeof v==='string'):[];
+}
+function alfGraphStatus(p,name) {
+  const v=p&&p.properties&&p.properties[name];
+  return v&&v.status&&typeof v.status.name==='string'?v.status.name:'';
+}
+function alfGraphName(x){return String(x||'').trim().replace(/\s+/g,' ').toLowerCase();}
+function alfGraphSourceConfig(raw) {
+  const c=typeof raw==='string'?JSON.parse(raw):raw;
+  if(!c||c.version!==2||!c.alfProfile||c.alfProfile.name!=='alf-life-os')
+    throw new Error('Verified Alf one-token profile required for graph synchronization');
+  const ids={board:alfGraphId(c.taskSource),
+    lower:alfGraphId(c.alfProfile.lowerSource),
+    upper:alfGraphId(c.alfProfile.upperSource)};
+  if(Object.values(ids).some(v=>!v))
+    throw new Error('Verified original project and board data sources required');
+  for(const key of Object.keys(ALF_TASK_PROFILE_FIELDS)){
+    const binding=c.taskPropertyBindings&&c.taskPropertyBindings[key];
+    if(!binding||alfGraphId(binding.sourceId)!==ids.board||
+      binding.input!==c[key]||typeof binding.id!=='string'||!binding.id)
+      throw new Error('Pinned board property ID missing: '+key);
+  }
+  return {ids,c};
+}
+function alfGraphField(page,c,key){
+  const binding=c.taskPropertyBindings[key];
+  const matches=Object.values(page&&page.properties||{}).filter(
+    v=>v&&v.id===binding.id);
+  return matches.length===1?matches[0]:null;
+}
+function alfGraphItem(page,c){
+  const title=alfGraphField(page,c,'titleProp');
+  const type=alfGraphField(page,c,'typeProp');
+  const project=alfGraphField(page,c,'projectProp');
+  const parent=alfGraphField(page,c,'parentProp');
+  const status=alfGraphField(page,c,'statusProp');
+  const estimate=alfGraphField(page,c,'estimateProp');
+  const date=alfGraphField(page,c,'executionProp');
+  if(!title||title.type!=='title'||!type||type.type!=='multi_select'||
+     !project||project.type!=='relation'||!parent||parent.type!=='relation'||
+     !status||status.type!=='status'||!estimate||estimate.type!=='number'||
+     !date||date.type!=='date')throw new Error('Board pinned schema mismatch');
+  const kinds=type.multi_select.map(v=>v.name);
+  if(kinds.includes('عادة') || !kinds.some(v=>v==='مهمة'||v==='حزمة'))return null;
+  const projects=(project.relation||[]).map(v=>alfGraphId(v.id)).filter(Boolean);
+  const parents=(parent.relation||[]).map(v=>alfGraphId(v.id)).filter(Boolean);
+  const t=(title.title||[]).map(v=>v.plain_text||(v.text&&v.text.content)||'').join('').trim();
+  const estimateHours=estimate.number;
+  if(!['hours','minutes'].includes(c.unit))
+    throw new Error('Unknown original Notion work time unit');
+  if(estimateHours!==null&&estimateHours!==undefined&&
+     (typeof estimateHours!=='number'||!Number.isFinite(estimateHours)||
+      estimateHours<0))throw new Error('Invalid Notion task time estimate');
+  const due=date.date&&date.date.start||'';
+  return {id:alfGraphId(page.id),title:t,kinds,projects,parents,
+    status:status.status&&status.status.name||'',
+    estimateMs:typeof estimateHours==='number'&&Number.isFinite(estimateHours)&&
+      estimateHours>=0?Math.round(estimateHours*(c.unit==='hours'?3600000:60000)):null,
+    due:/^\d{4}-\d{2}-\d{2}$/.test(due)?due:null};
+}
+function alfGraphSpecHeaders(token) {
+  return {Authorization:'Bearer '+token,'Notion-Version':'2026-03-11',
+    'Content-Type':'application/json'};
+}
+async function alfGraphRequest(api,token,path,method='GET',body) {
+  const opts={method,headers:alfGraphSpecHeaders(token),timeout:30000,
+    responseType:'json'};
+  if(body!==undefined)opts.body=body;
+  return await alfQueuedNotionRequest(api,'https://api.notion.com/v1'+path,opts);
+}
+async function alfGraphAll(api,token,source,filter,maxRows=ALF_GRAPH_MAX_ROWS) {
+  const result=[],seen=new Set();let cursor=null;
+  for(let n=0;n<Math.ceil(maxRows/100);n++){
+    const body={page_size:Math.min(100,maxRows-result.length)};
+    if(filter)body.filter=filter;
+    if(cursor)body.start_cursor=cursor;
+    const page=await alfGraphRequest(api,token,
+      '/data_sources/'+source+'/query','POST',body);
+    if(!page||!Array.isArray(page.results)||page.results.length>body.page_size)
+      throw new Error('Invalid Notion graph inventory response');
+    for(const entry of page.results) {
+      const id=alfGraphId(entry&&entry.id);
+      if(!id||seen.has(id))throw new Error('Duplicate or invalid graph page ID');
+      seen.add(id);result.push(entry);
+    }
+    if(!page.has_more)return result;
+    if(!page.next_cursor||page.next_cursor===cursor||
+       typeof page.next_cursor!=='string')
+      throw new Error('Invalid Notion graph cursor');
+    cursor=page.next_cursor;
+  }
+  throw new Error('Graph inventory incomplete; refuses partial synchronization');
+}
+async function alfGraphInventory(api) {
+  if(typeof api.getSecret!=='function'||typeof api.loadSyncedData!=='function'||
+     typeof api.getAllProjects!=='function'||typeof api.getTasks!=='function'||
+     typeof api.getArchivedTasks!=='function'||typeof api.request!=='function')
+    throw new Error('SP graph host capabilities missing');
+  const [token,raw]=await Promise.all([
+    api.getSecret('alf-notion-token'),api.loadSyncedData('alf-mapping-v2')]);
+  if(!token)throw new Error('No local Notion token');
+  const cfg=alfGraphSourceConfig(raw);
+  const ids=cfg.ids;
+  const [upperSchema,lowerSchema,boardSchema]=await Promise.all([
+    alfGraphRequest(api,token,'/data_sources/'+ids.upper),
+    alfGraphRequest(api,token,'/data_sources/'+ids.lower),
+    alfGraphRequest(api,token,'/data_sources/'+ids.board)]);
+  const need=(source,defs)=>{
+    const props=source&&source.properties||{};
+    for(const [name,type] of defs){
+      if(!props[name]||props[name].type!==type)
+        throw new Error('Notion graph source changed: '+name);
+    }
+  };
+  need(upperSchema,[['Name','title'],['النظام','select']]);
+  need(lowerSchema,[['Name','title'],['العنصر الأب','relation'],
+    ['النوع  ','multi_select']]);
+  need(boardSchema,Object.values(ALF_TASK_PROFILE_FIELDS));
+  for(const [key] of Object.entries(ALF_TASK_PROFILE_FIELDS)) {
+    const match=alfAutoProp(boardSchema,cfg.c.taskPropertyBindings[key].id);
+    if(!match||match.type!==ALF_TASK_PROFILE_FIELDS[key][1])
+      throw new Error('Original pinned board schema changed');
+  }
+  const [upper,lower,board,spProjects,spActive,spArchive]=await Promise.all([
+    alfGraphAll(api,token,ids.upper),
+    alfGraphAll(api,token,ids.lower),
+    alfGraphAll(api,token,ids.board,{or:[
+      {property:'نوع الصفحة',multi_select:{contains:'مهمة'}},
+      {property:'نوع الصفحة',multi_select:{contains:'حزمة'}}
+    ]}),api.getAllProjects(),api.getTasks(),api.getArchivedTasks()]);
+  if(!Array.isArray(spProjects)||!Array.isArray(spActive)||!Array.isArray(spArchive))
+    throw new Error('SP project/task inventories unavailable');
+  const upperChoices=upper.filter(p=>
+    p&&p.properties&&p.properties['النظام']&&
+    p.properties['النظام'].select&&
+    p.properties['النظام'].select.name==='مشروع')
+    .map(p=>({id:alfGraphId(p.id),name:alfGraphTitle(p,'Name')}))
+    .filter(p=>p.id&&p.name);
+  const upperProjects=new Set(upperChoices.map(p=>p.id));
+  const projects=lower.map(p=>{
+    if(p.in_trash)return null;
+    const name=alfGraphTitle(p,'Name');
+    const kinds=alfGraphKinds(p,'النوع  ');
+    const parents=alfGraphRelation(p,'العنصر الأب');
+    const folderParent=alfGraphRelation(p,'المجلد الأب الفرعي');
+    if(!name||name.length>160||parents.length!==1||
+       !upperProjects.has(parents[0])||folderParent.length||
+       kinds.some(k=>['مجلد رئيسي','مجلد فرعي','كورس','دبلومة',
+         'فيديو','مصدر مقالات'].includes(k)))return null;
+    return {id:alfGraphId(p.id),name,parent:parents[0]};
+  }).filter(Boolean);
+  const tasks=board.map(p=>p.in_trash?null:alfGraphItem(p,cfg.c)).filter(Boolean);
+  if(tasks.some(t=>!t.id))
+    throw new Error('Invalid original board task IDs');
+  return {ids,c:cfg.c,token,projects,tasks,upperChoices,spProjects,
+    spActive,spArchive};
+}
+function alfGraphMarker(notionId){return 'alf-notion-page-id:'+alfGraphDashedId(notionId);}
+function alfGraphTaskLinkKey(nid){
+  return ALF_AUTO_PLAN_LINK_PREFIX+alfGraphDashedId(nid);
+}
+async function alfGraphExistingTaskLink(api,id){
+  // v0.35 stored Notion ids in their original hyphenated API form.
+  const primary=await api.loadSyncedData(alfGraphTaskLinkKey(id));
+  if(primary)return primary;
+  return await api.loadSyncedData(ALF_AUTO_PLAN_LINK_PREFIX+alfGraphId(id));
+}
+function alfGraphTaskClaim(t,id) {
+  const notes=typeof (t&&t.notes)==='string'?t.notes:'';
+  return notes.split(/\s+/).some(v=>v.startsWith('alf-notion-page-id:')&&
+    alfGraphId(v.slice('alf-notion-page-id:'.length))===id);
+}
+function alfGraphSignature(plan){
+  return JSON.stringify({projects:plan.projects,tasks:plan.tasks,
+    exportsProjects:plan.exportsProjects,exportsTasks:plan.exportsTasks,
+    upperChoices:plan.upperChoices,observedFocus:plan.observedFocus,
+    skipped:plan.skipped});
+}
+function alfGraphFingerprint(signature){
+  // Non-secret short review label. The host also compares the exact signature.
+  let h=2166136261;
+  for(let i=0;i<signature.length;i++){
+    h^=signature.charCodeAt(i);h=Math.imul(h,16777619);
+  }
+  return 'graph-'+(h>>>0).toString(16).padStart(8,'0')+'-'+signature.length;
+}
+async function alfGraphPlan(api,inventory){
+  const {projects,tasks,spProjects,spActive,spArchive}=inventory;
+  const projectLinks=new Map(),taskLinks=new Map();
+  const skipped={projects:0,tasks:0,conflicts:0};
+  const actions={projects:[],tasks:[],exportsProjects:[],
+    exportsTasks:[],upperChoices:inventory.upperChoices||[],skipped,
+    observedFocus:[]};
+  const mappedSp=new Set();
+  for(const p of projects) {
+    const raw=await api.loadSyncedData(ALF_GRAPH_PROJECT_LINK_PREFIX+p.id);
+    const link=raw?JSON.parse(raw):null;
+    if(link&&(link.version!==1||link.notionId!==p.id||
+       typeof link.spId!=='string'))
+      throw new Error('Corrupted SP project link; no synchronization');
+    if(link) {
+      const sp=spProjects.filter(x=>x&&x.id===link.spId);
+      if(sp.length!==1||mappedSp.has(link.spId)){
+        skipped.conflicts++;continue;
+      }
+      projectLinks.set(p.id,link.spId);
+      mappedSp.add(link.spId);
+    }else{
+      const equal=spProjects.filter(x=>x&&alfGraphName(x.title)===
+        alfGraphName(p.name));
+      if(equal.length>1 || (equal.length===1&&mappedSp.has(equal[0].id))){
+        skipped.conflicts++;continue;
+      }
+      if(equal.length===1) {
+        actions.projects.push({id:p.id,name:p.name,parent:p.parent,
+          adoptSpId:equal[0].id});
+        mappedSp.add(equal[0].id);
+      } else actions.projects.push({id:p.id,name:p.name,parent:p.parent});
+    }
+  }
+  const active=[...spActive,...spArchive],seenTasks=new Set();
+  for(const t of tasks) {
+    if(!t.title||t.title.length>250||t.projects.length>1||
+       (t.projects.length===1&&!projects.some(p=>p.id===t.projects[0]))||
+       t.parents.length>1||!['Done','Not started','In progress'].includes(t.status)||
+       (t.estimateMs!==null&&!Number.isSafeInteger(t.estimateMs))){
+      skipped.tasks++;continue;
+    }
+    const claims=active.filter(sp=>alfGraphTaskClaim(sp,t.id));
+    const raw=await alfGraphExistingTaskLink(api,t.id);
+    const link=raw?JSON.parse(raw):null;
+    if(link&&(alfGraphId(link.notionId)!==t.id||
+      typeof link.spId!=='string'))
+      throw new Error('Invalid original task identity link');
+    if(claims.length>1||
+       (claims.length===1&&link&&claims[0].id!==link.spId)){
+      skipped.conflicts++;continue;
+    }
+    const existing=link?active.filter(sp=>sp.id===link.spId):claims;
+    if(existing.length===1) {
+      if(!alfGraphTaskClaim(existing[0],t.id)||seenTasks.has(existing[0].id)){
+        skipped.conflicts++;continue;
+      }
+      // Marker-only candidates are not authorized for automatic status or
+      // time writeback until an independently saved ID link exists.
+      if(!link){skipped.tasks++;continue;}
+      seenTasks.add(existing[0].id);taskLinks.set(t.id,existing[0].id);
+      continue;
+    }
+    if(link||t.status==='Done'){skipped.tasks++;continue;}
+    const pendingAdopt=actions.projects.find(p=>
+      p.id===t.projects[0]&&p.adoptSpId);
+    const potentialProject=t.projects.length===0?'INBOX_PROJECT':
+      projectLinks.get(t.projects[0])||
+      (pendingAdopt&&pendingAdopt.adoptSpId);
+    if(potentialProject && active.some(sp=>
+      sp&&sp.projectId===potentialProject&&
+      alfGraphName(sp.title)===alfGraphName(t.title))) {
+      skipped.conflicts++;continue;
+    }
+    const isSub=t.parents.length===1;
+    if(isSub) {
+      const parent=tasks.find(x=>x.id===t.parents[0]);
+      if(!parent||!parent.kinds.includes('حزمة')||parent.parents.length||
+         parent.projects.length!==t.projects.length||
+         (t.projects.length&&parent.projects[0]!==t.projects[0])){
+        skipped.conflicts++;continue;
+      }
+    }
+    actions.tasks.push({id:t.id,title:t.title,project:t.projects[0]||null,
+      parent:t.parents[0]||null,kind:isSub?'subtask':'task',
+      isBundle:t.kinds.includes('حزمة'),
+      estimateMs:t.estimateMs,due:t.due,status:t.status});
+  }
+  actions.tasks.sort((a,b)=>Number(!!a.parent)-Number(!!b.parent));
+  // SP-created projects have no upper-level identity. Never guess a Notion
+  // parent; a user must choose an EXISTING parent with النظام=مشروع.
+  const knownSpProjects=new Set([...mappedSp,...actions.projects
+    .filter(p=>p.adoptSpId).map(p=>p.adoptSpId)]);
+  for(const sp of spProjects) {
+    if(!sp||typeof sp.id!=='string'||!sp.id||
+       sp.id==='INBOX_PROJECT'||sp.isArchived===true||
+       typeof sp.title!=='string'||!sp.title.trim()||
+       sp.title.length>160||knownSpProjects.has(sp.id))continue;
+    if(projects.some(p=>alfGraphName(p.name)===alfGraphName(sp.title))){
+      skipped.conflicts++;continue;
+    }
+    actions.exportsProjects.push({spId:sp.id,title:sp.title});
+  }
+  const seenSpIds=new Set(),linkedSpTasks=new Set(taskLinks.values());
+  const allProjectIds=new Set(spProjects.map(p=>p.id));
+  for(const sp of spActive){
+    if(!sp||typeof sp.id!=='string'||!sp.id||seenSpIds.has(sp.id)||
+       linkedSpTasks.has(sp.id)||
+       typeof sp.title!=='string'||!sp.title.trim()||
+       sp.title.length>250||
+       (!allProjectIds.has(sp.projectId)&&sp.projectId!=='INBOX_PROJECT')||
+       (spProjects.find(p=>p.id===sp.projectId)||{}).isArchived===true||
+       sp.isRepeat||sp.repeatCfgId)continue;
+    seenSpIds.add(sp.id);
+    // Any Notion identity in notes is not ours to overwrite or recreate.
+    if(typeof sp.notes==='string'&&sp.notes.includes('alf-notion-page-id:'))continue;
+    // Existing same-title tasks on BOTH sides may be unrelated or may be
+    // pre-link twins. Do not create a second entity in either direction.
+    const possibleNotion=tasks.some(t=>{
+      if(alfGraphName(t.title)!==alfGraphName(sp.title))return false;
+      if(!t.projects.length)return sp.projectId==='INBOX_PROJECT';
+      const candidate=projectLinks.get(t.projects[0])||
+        (actions.projects.find(p=>p.id===t.projects[0])||{}).adoptSpId;
+      return candidate===sp.projectId;
+    });
+    if(possibleNotion){skipped.conflicts++;continue;}
+    if(sp.parentId){
+      const parent=spActive.find(t=>t.id===sp.parentId);
+      if(!parent||parent.projectId!==sp.projectId||parent.parentId){
+        skipped.conflicts++;continue;
+      }
+    }
+    actions.exportsTasks.push({spId:sp.id,title:sp.title,
+      spProjectId:sp.projectId,parentSpId:sp.parentId||null,
+      isDone:sp.isDone===true,notes:typeof sp.notes==='string'?sp.notes:'',
+      timeSpent:sp.timeSpent||0,timeEstimate:sp.timeEstimate||0,
+      dueDay:sp.dueDay||null,
+      isBundle:Array.isArray(sp.subTaskIds)&&sp.subTaskIds.length>0});
+  }
+  actions.exportsTasks.sort((a,b)=>Number(!!a.parentSpId)-Number(!!b.parentSpId));
+  // Observed focus action-hook sessions are only a confirmed lower bound;
+  // nothing is inferred from timeSpent or calendar days.
+  if(typeof api.listSyncedDataKeys==='function'){
+    const keys=await api.listSyncedDataKeys(ALF_FOCUS_KEY_PREFIX);
+    if(!Array.isArray(keys)||keys.length>2000)
+      throw new Error('Focus session inventory truncated or unavailable');
+    const seen=new Set(),counts=new Map();
+    for(const key of keys) {
+      if(typeof key!=='string'||!key.startsWith(ALF_FOCUS_KEY_PREFIX))continue;
+      const raw=await api.loadSyncedData(key);
+      if(!raw)continue;
+      let record;
+      try{record=JSON.parse(raw);}catch(_){continue;}
+      if(!record||record.schemaVersion!==1||
+         typeof record.sessionId!=='string'||
+         key!==ALF_FOCUS_KEY_PREFIX+record.sessionId||
+         seen.has(record.sessionId)||
+         record.source!=='live-sp-action-hook'||
+         record.mode!=='Pomodoro'||record.automatic!==true||
+         record.manual!==false||record.observedCompletion!==true||
+         record.verifiedCompletedPomodoro!==true||
+         typeof record.taskId!=='string'||
+         !Number.isFinite(record.startedAt)||!Number.isFinite(record.endedAt)||
+         record.endedAt<record.startedAt)continue;
+      seen.add(record.sessionId);
+      counts.set(record.taskId,(counts.get(record.taskId)||0)+1);
+    }
+    actions.observedFocus=[...taskLinks].filter(([,spId])=>counts.has(spId))
+      .map(([notionId,spId])=>({notionId,spId,
+        observedMinimum:counts.get(spId)}));
+  }
+  actions.signature=alfGraphSignature(actions);
+  actions.fingerprint=alfGraphFingerprint(actions.signature);
+  actions.links={projects:projectLinks,tasks:taskLinks};
+  return actions;
+}
+function alfGraphPublicReview(p){
+  return {fingerprint:p.fingerprint,
+    projects:p.projects.slice(0,40),tasks:p.tasks.slice(0,40),
+    exportsProjects:p.exportsProjects.slice(0,40),
+    exportsTasks:p.exportsTasks.slice(0,40),
+    observedFocus:p.observedFocus.slice(0,40),
+    upperChoices:p.upperChoices,
+    totals:{projects:p.projects.length,tasks:p.tasks.length,
+      exportProjects:p.exportsProjects.length,
+      exportTasks:p.exportsTasks.length,
+      linkedObservedPomodoroTasks:p.observedFocus.length,
+      reviewTruncated:[p.projects,p.tasks,p.exportsProjects,
+        p.exportsTasks].some(items=>items.length>40),
+      skipped:p.skipped,limited:p.projects.length+p.tasks.length>
+        ALF_GRAPH_MAX_WRITES_PER_REVIEW},
+    note:'Two directions have independently reviewed create actions; observed Pomodoros are a lower bound, never complete history'};
+}
+async function alfGraphApplyLocal(api,inventory,plan) {
+  if(typeof api.addProject!=='function'||typeof api.addTask!=='function'||
+     typeof api.persistDataSynced!=='function')
+    throw new Error('Official SP project/task create API unavailable');
+  const result={projects:0,tasks:0,skipped:0,errors:0,
+    note:'No Notion writes; re-preview to reconcile changes'};
+  const pids=new Map(plan.links.projects), tids=new Map(plan.links.tasks);
+  // Never create a second SP project if a same-title project now exists.
+  let writeSlots=ALF_GRAPH_MAX_WRITES_PER_REVIEW;
+  for(const p of plan.projects){
+    if(!writeSlots)break;
+    const all=await api.getAllProjects();
+    if(p.adoptSpId){
+      const match=all.filter(x=>x.id===p.adoptSpId&&
+        alfGraphName(x.title)===alfGraphName(p.name));
+      if(match.length!==1){result.skipped++;continue;}
+      try {
+        await api.persistDataSynced(JSON.stringify({version:1,notionId:p.id,
+          spId:p.adoptSpId}),ALF_GRAPH_PROJECT_LINK_PREFIX+p.id);
+        pids.set(p.id,p.adoptSpId);result.projects++;writeSlots--;
+      }catch(_){result.errors++;}
+      continue;
+    }
+    if(all.some(x=>alfGraphName(x.title)===alfGraphName(p.name))){
+      result.skipped++;continue;
+    }
+    try{
+      const id=await api.addProject({title:p.name});
+      if(typeof id!=='string'||!id)throw new Error('SP project creation not confirmed');
+      await api.persistDataSynced(JSON.stringify({version:1,notionId:p.id,
+        spId:id}),ALF_GRAPH_PROJECT_LINK_PREFIX+p.id);
+      pids.set(p.id,id);result.projects++;writeSlots--;
+    }catch(_){result.errors++;}
+  }
+  for(const t of plan.tasks){
+    if(!writeSlots)break;
+    const projectId=t.project?pids.get(t.project):null;
+    if(t.project&&!projectId){result.skipped++;continue;}
+    const parentId=t.parent?tids.get(t.parent):null;
+    if(t.parent&&!parentId){result.skipped++;continue;}
+    const all=[...(await api.getTasks()||[]),...(await api.getArchivedTasks()||[])];
+    const claims=all.filter(x=>alfGraphTaskClaim(x,t.id));
+    if(claims.length){
+      result.skipped++;continue;
+    }
+    const linkKey=alfGraphTaskLinkKey(t.id);
+    if(await alfGraphExistingTaskLink(api,t.id)){result.skipped++;continue;}
+    try{
+      const payload={title:t.title,notes:alfGraphMarker(t.id),
+        isIgnoreShortSyntax:true,isDone:false};
+      if(projectId)payload.projectId=projectId;
+      if(t.estimateMs!==null)payload.timeEstimate=t.estimateMs;
+      if(t.due)payload.dueDay=t.due;
+      if(parentId)payload.parentId=parentId;
+      const id=await api.addTask(payload);
+      if(typeof id!=='string'||!id)throw new Error('SP task creation not confirmed');
+      await api.persistDataSynced(JSON.stringify({version:1,
+        notionId:alfGraphDashedId(t.id),
+        spId:id}),linkKey);
+      tids.set(t.id,id);result.tasks++;writeSlots--;
+    }catch(_){result.errors++;}
+  }
+  return result;
+}
+// Reverse creation is intentionally a separate, explicitly reviewed command.
+// Notion has no atomic create-if-absent key. Persist an attempted SP identity
+// BEFORE POST; on timeout/unknown response never retry it automatically.
+const ALF_GRAPH_PROJECT_INTENT_PREFIX='alf-graph-project-export-v1-';
+const ALF_GRAPH_TASK_INTENT_PREFIX='alf-graph-task-export-v1-';
+const ALF_GRAPH_STATUS_ANCHOR_PREFIX='alf-graph-status-v1-';
+const ALF_GRAPH_AUTO_KEY='alf-auto-graph-local-enabled-v1';
+const ALF_GRAPH_AUTO_PARENT_KEY='alf-auto-graph-parent-v1';
+function alfGraphSpId(id){
+  if(typeof id!=='string'||!id||id.length>120||/\s/.test(id))
+    throw new Error('Invalid SP entity identity');
+  return id;
+}
+function alfGraphReverseProjectMap(plan){
+  return new Map([...plan.links.projects].map(([notionId,spId])=>[spId,notionId]));
+}
+async function alfGraphApplyRemote(api,inventory,plan,upperParentId){
+  if(typeof api.persistDataSynced!=='function'||typeof api.updateTask!=='function')
+    throw new Error('Official SP mapping and task-update capabilities required');
+  const upper=alfGraphId(upperParentId);
+  if(upperParentId && !plan.upperChoices.some(p=>p.id===upper))
+    throw new Error('Select an existing Notion project parent, never a folder');
+  const counts={projects:0,tasks:0,skipped:0,errors:0,pending:0,
+    note:'SP to Notion reviewed create, no retry of ambiguous POST'};
+  const pids=alfGraphReverseProjectMap(plan);
+  const notionTaskIds=new Map([...plan.links.tasks].map(([nid,sid])=>[sid,nid]));
+  const {c,ids,token}=inventory;
+  let slots=ALF_GRAPH_MAX_WRITES_PER_REVIEW;
+  for(const project of plan.exportsProjects){
+    if(!slots)break;
+    const spId=alfGraphSpId(project.spId);
+    if(!upper){counts.skipped++;continue;}
+    const key=ALF_GRAPH_PROJECT_INTENT_PREFIX+spId;
+    // An earlier operation may have committed despite a lost response.
+    if(await api.loadSyncedData(key)){counts.pending++;continue;}
+    const others=await api.getAllProjects();
+    if(!others.some(p=>p.id===spId&&p.title===project.title)){
+      counts.skipped++;continue;
+    }
+    // The promise below can resolve after Notion has already created a page.
+    // An attempted ledger prevents a second create when the outcome is unknown.
+    await api.persistDataSynced(JSON.stringify({version:1,status:'attempted',
+      spId,sourceId:ids.lower,parent:upper}),key);
+    slots--;
+    try{
+      const page=await alfGraphRequest(api,token,'/pages','POST',{
+        parent:{type:'data_source_id',data_source_id:ids.lower},
+        properties:{
+          'Name':{title:[{text:{content:project.title}}]},
+          'العنصر الأب':{relation:[{id:upper}]}
+        }
+      });
+      const nid=alfGraphId(page&&page.id);
+      if(!nid||alfGraphId(page&&page.parent&&page.parent.data_source_id)!==ids.lower)
+        throw new Error('Unconfirmed Notion project create');
+      await api.persistDataSynced(JSON.stringify({version:1,notionId:nid,
+        spId}),ALF_GRAPH_PROJECT_LINK_PREFIX+nid);
+      await api.persistDataSynced(JSON.stringify({version:1,status:'committed',
+        spId,notionId:nid,sourceId:ids.lower,parent:upper}),key);
+      pids.set(spId,nid);counts.projects++;
+    }catch(_){counts.errors++;counts.pending++;}
+  }
+  for(const t of plan.exportsTasks){
+    if(!slots)break;
+    const spId=alfGraphSpId(t.spId);
+    const isInbox=t.spProjectId==='INBOX_PROJECT';
+    const notionProject=pids.get(t.spProjectId);
+    if(!notionProject&&!isInbox){counts.skipped++;continue;}
+    const notionParent=t.parentSpId?notionTaskIds.get(t.parentSpId):null;
+    if(t.parentSpId&&!notionParent){counts.skipped++;continue;}
+    const key=ALF_GRAPH_TASK_INTENT_PREFIX+spId;
+    if(await api.loadSyncedData(key)){counts.pending++;continue;}
+    const active=await api.getTasks();
+    const live=active.filter(x=>x.id===spId);
+    if(live.length!==1||live[0].title!==t.title||
+       live[0].projectId!==t.spProjectId||
+       (live[0].parentId||null)!==t.parentSpId||
+       live[0].isDone!==t.isDone||
+       live[0].notes!==t.notes||
+       (live[0].timeSpent||0)!==t.timeSpent||
+       (live[0].timeEstimate||0)!==t.timeEstimate||
+       (live[0].dueDay||null)!==t.dueDay){
+      counts.skipped++;continue;
+    }
+    const properties={
+      [c.titleProp]:{title:[{text:{content:t.title}}]},
+      [c.typeProp]:{multi_select:[{name:t.isBundle?'حزمة':'مهمة'}]},
+      [c.statusProp]:{status:{name:t.isDone?'Done':'Not started'}}
+    };
+    if(notionProject)properties[c.projectProp]={relation:[{id:notionProject}]};
+    if(notionParent)properties[c.parentProp]={relation:[{id:notionParent}]};
+    if(Number.isSafeInteger(t.timeEstimate)&&t.timeEstimate>0)
+      properties[c.estimateProp]={number:t.timeEstimate/3600000};
+    if(Number.isSafeInteger(t.timeSpent)&&t.timeSpent>0)
+      properties[c.actualProp]={number:t.timeSpent/3600000};
+    if(typeof t.dueDay==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(t.dueDay))
+      properties[c.executionProp]={date:{start:t.dueDay}};
+    await api.persistDataSynced(JSON.stringify({version:1,status:'attempted',
+      spId,sourceId:ids.board,notionProject:notionProject||null}),key);
+    slots--;
+    try{
+      const page=await alfGraphRequest(api,token,'/pages','POST',{
+        parent:{type:'data_source_id',data_source_id:ids.board},
+        properties
+      });
+      const nid=alfGraphId(page&&page.id);
+      if(!nid||alfGraphId(page&&page.parent&&page.parent.data_source_id)!==ids.board)
+        throw new Error('Unconfirmed Notion task creation');
+      await api.persistDataSynced(JSON.stringify({version:1,
+        notionId:alfGraphDashedId(nid),
+        spId}),alfGraphTaskLinkKey(nid));
+      // Preserve every existing user note and add only an exact identity marker.
+      await api.updateTask(spId,{notes:(t.notes?t.notes.trimEnd()+'\n':'')+
+        alfGraphMarker(nid)});
+      await api.persistDataSynced(JSON.stringify({version:1,status:'committed',
+        notionId:nid,spId,sourceId:ids.board}),key);
+      notionTaskIds.set(spId,nid);counts.tasks++;
+    }catch(_){counts.errors++;counts.pending++;}
+  }
+  return counts;
+}
+// Exact task identity, three-way status baselines, no arbitrary last-writer
+// wins. This deliberately does not infer In progress from time tracking.
+async function alfGraphSyncStatuses(api,inventory,plan){
+  const stats={anchored:0,updated:0,written:0,conflicts:0,skipped:0,errors:0};
+  if(typeof api.updateTask!=='function')return {...stats,errors:1};
+  const all=[...inventory.spActive,...inventory.spArchive];
+  let remaining=8;
+  for(const [notionId,spId] of plan.links.tasks) {
+    if(!remaining--)break;
+    const page=inventory.tasks.find(t=>t.id===notionId);
+    const matches=all.filter(t=>t.id===spId&&alfGraphTaskClaim(t,notionId));
+    if(!page||matches.length!==1||
+       !['Not started','In progress','Done'].includes(page.status)){
+      stats.skipped++;continue;
+    }
+    const sp=matches[0];
+    if(Array.isArray(sp.subTaskIds)&&sp.subTaskIds.length){
+      stats.skipped++;continue; // bundles' aggregate state is not a leaf completion
+    }
+    const done=sp.isDone===true;
+    const key=ALF_GRAPH_STATUS_ANCHOR_PREFIX+notionId;
+    let anchor;
+    try{
+      const raw=await api.loadSyncedData(key);
+      anchor=raw?JSON.parse(raw):null;
+      if(anchor&&(anchor.version!==1||anchor.notionId!==notionId||
+         anchor.spId!==spId||anchor.sourceId!==inventory.ids.board||
+         typeof anchor.spDone!=='boolean'||
+         !['Not started','In progress','Done'].includes(anchor.notionStatus))){
+        stats.conflicts++;continue;
+      }
+      if(!anchor) {
+        if(done!==(page.status==='Done')){stats.conflicts++;continue;}
+        await api.persistDataSynced(JSON.stringify({version:1,
+          notionId,spId,sourceId:inventory.ids.board,
+          spDone:done,notionStatus:page.status}),key);
+        stats.anchored++;continue;
+      }
+      const spChanged=done!==anchor.spDone;
+      const notionChanged=page.status!==anchor.notionStatus;
+      if(spChanged&&notionChanged&&done!==(page.status==='Done')){
+        stats.conflicts++;continue;
+      }
+      if(spChanged&&!notionChanged) {
+        const newStatus=done?'Done':'Not started';
+        // Preflight the exact original current page and pinned status property.
+        const current=await alfGraphRequest(api,inventory.token,'/pages/'+notionId);
+        if(!current||current.object!=='page'||current.in_trash||
+           alfGraphId(current.id)!==notionId||
+           alfGraphId(current.parent&&current.parent.data_source_id)!==
+             inventory.ids.board ||
+           alfGraphStatus(current,inventory.c.statusProp)!==page.status){
+          stats.conflicts++;continue;
+        }
+        const updated=await api.getTasks();
+        const after=updated.find(t=>t.id===spId)||
+          (await api.getArchivedTasks()).find(t=>t.id===spId);
+        if(!after||after.isDone!==done){stats.conflicts++;continue;}
+        const patched=await alfGraphRequest(api,inventory.token,
+          '/pages/'+notionId,'PATCH',{properties:{
+            [inventory.c.taskPropertyBindings.statusProp.id]:
+              {status:{name:newStatus}}
+          }});
+        if(!patched||alfGraphId(patched.id)!==notionId)
+          throw new Error('Notion status update outcome unknown');
+        page.status=newStatus;stats.written++;
+      }else if(!spChanged&&notionChanged&&
+          done!==(page.status==='Done')){
+        if(!inventory.spActive.some(t=>t.id===spId)){
+          stats.conflicts++;continue;
+        }
+        const live=await api.getTasks();
+        if(!live.some(t=>t.id===spId&&t.isDone===done&&
+          alfGraphTaskClaim(t,notionId))){
+          stats.conflicts++;continue;
+        }
+        await api.updateTask(spId,{isDone:page.status==='Done'});
+        stats.updated++;
+      }
+      if(spChanged||notionChanged){
+        const newDone=spChanged?done:page.status==='Done';
+        await api.persistDataSynced(JSON.stringify({version:1,
+          notionId,spId,sourceId:inventory.ids.board,
+          spDone:newDone,notionStatus:page.status}),key);
+      }else stats.skipped++;
+    }catch(_){stats.errors++;}
+  }
+  return stats;
+}
+// Opt-in foreground/background-host reconciliation of NEW entities only.
+// Notion create POST is never retried after ambiguous failure. Other existing
+// engines own approved plan/time/habit fields; do not double-write them here.
+// A single designated Windows/Android writer per account is required.
+function alfCreateAutoGraphSync(api,options={}){
+  const intervalMs=options.intervalMs||10*60*1000;
+  let timer=null,inflight=false,previous=0;
+  async function runOnce(){
+    const result={enabled:false,processed:0,written:0,skipped:0,
+      conflicts:0,errors:0};
+    if(typeof api.getSecret!=='function' ||
+       await api.getSecret(ALF_GRAPH_AUTO_KEY)!=='enabled')return result;
+    result.enabled=true;
+    try{
+      const inventory=await alfGraphInventory(api);
+      const plan=await alfGraphPlan(api,inventory);
+      if([plan.projects,plan.tasks,plan.exportsProjects,
+        plan.exportsTasks].some(items=>items.length>40)){
+        result.conflicts++;result.skipped++;
+        await alfStoreAutoStatus(api,'graph',result);
+        return result; // Never mutate an unreviewable backlog.
+      }
+      const local=await alfGraphApplyLocal(api,inventory,plan);
+      const upper=await api.getSecret(ALF_GRAPH_AUTO_PARENT_KEY)||'';
+      const remote=await alfGraphApplyRemote(api,inventory,plan,upper);
+      const statuses=await alfGraphSyncStatuses(api,inventory,plan);
+      result.processed=plan.projects.length+plan.tasks.length+
+        plan.exportsProjects.length+plan.exportsTasks.length;
+      result.written=local.projects+local.tasks+
+        remote.projects+remote.tasks+statuses.written;
+      result.skipped=local.skipped+remote.skipped+remote.pending+statuses.skipped;
+      result.conflicts=plan.skipped.conflicts+statuses.conflicts;
+      result.errors=local.errors+remote.errors+statuses.errors;
+    }catch(_){result.errors++;}
+    await alfStoreAutoStatus(api,'graph',result);
+    return result;
+  }
+  async function heartbeat(){
+    if(inflight||Date.now()-previous<intervalMs)return;
+    inflight=true;previous=Date.now();
+    try{return await runOnce();}
+    finally{inflight=false;}
+  }
+  function start(){
+    if(timer!==null||typeof setInterval!=='function')return;
+    timer=setInterval(()=>{void heartbeat();},60000);
+    void heartbeat();
+  }
+  function stop(){
+    if(timer!==null&&typeof clearInterval==='function')clearInterval(timer);
+    timer=null;
+  }
+  return {runOnce,start,stop,heartbeat};
+}
+
 if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
   const alfAutomaticPlan=alfCreateAutoPlanSync(PluginAPI);
   const alfAutomaticTime=alfCreateAutoTimeSync(PluginAPI);
   const alfAutomaticHabits=alfCreateAutoHabitSync(PluginAPI);
+  const alfAutomaticGraph=alfCreateAutoGraphSync(PluginAPI);
   PluginAPI.onReady(()=>{
     alfAutomaticPlan.start();
     alfAutomaticTime.start();
     alfAutomaticHabits.start();
+    alfAutomaticGraph.start();
   });
   if(typeof PluginAPI.onUnload==='function')
     PluginAPI.onUnload(()=>{
@@ -1532,5 +2296,6 @@ if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
       alfAutomaticPlan.stop();
       alfAutomaticTime.stop();
       alfAutomaticHabits.stop();
+      alfAutomaticGraph.stop();
     });
 }
