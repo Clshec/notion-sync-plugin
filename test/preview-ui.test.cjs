@@ -634,6 +634,76 @@ test('quick habits read daily board rows, not definition source, with mixed type
   assert.equal(env.stores.filter(x=>x.key.startsWith('alf-habit-definition-link-v1-')).length,0);
 });
 
+test('daily SP counter import cannot run before explicit checkbox approval',async()=>{
+  const env=await dailyBoardPreviewEnv([
+    aDailyBoardRow('new-day-row','Unlinked new daily item','2026-11-16',
+      '11111111111141118111111111111111')
+  ],true);
+  await env.els('quickPreviewHabits').events.click();
+  await env.els('createDailyCountersBtn').events.click();
+  assert.match(env.els('notice').textContent,/approve the read-only recheck first/);
+  assert.equal(env.els('authorizeCreateDailyCounters').checked,false);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('approved recheck of a missing daily counter cannot write an ephemeral SP counter',async()=>{
+  const env=await dailyBoardPreviewEnv([
+    aDailyBoardRow('new-day-row','Unique new daily habit','2026-11-16',
+      '11111111111141118111111111111111')
+  ],true);
+  await env.els('quickPreviewHabits').events.click();
+  env.els('authorizeCreateDailyCounters').checked=true;
+  await env.els('createDailyCountersBtn').events.click();
+  assert.match(env.els('dailyHabitsReport').textContent,/setCounter/);
+  assert.equal(env.imports.length,0);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+  assert.equal(env.els('authorizeCreateDailyCounters').checked,false);
+});
+
+test('daily counter importer rejects stale SP day before any SP host request',async()=>{
+  const env=await dailyBoardPreviewEnv([
+    aDailyBoardRow('new-day-row','Unlinked new daily item','2026-11-16',
+      '11111111111141118111111111111111')
+  ],true);
+  await env.els('quickPreviewHabits').events.click();
+  env.els('authorizeCreateDailyCounters').checked=true;
+  env.setLogicalDay('2026-11-17');
+  await env.els('createDailyCountersBtn').events.click();
+  assert.match(env.els('notice').textContent,/logical day changed/);
+  assert.equal(env.els('authorizeCreateDailyCounters').checked,false);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('daily counter importer refuses duplicate daily names before any host creation',async()=>{
+  const env=await dailyBoardPreviewEnv([
+    aDailyBoardRow('row-one','Same daily title','2026-11-16',
+      '11111111111141118111111111111111'),
+    aDailyBoardRow('row-two','Same daily title','2026-11-16',
+      '22222222222242228222222222222222')
+  ],true);
+  await env.els('quickPreviewHabits').events.click();
+  env.els('authorizeCreateDailyCounters').checked=true;
+  await env.els('createDailyCountersBtn').events.click();
+  assert.match(env.els('notice').textContent,/Ambiguous or unsupported daily habit/);
+  assert.equal(env.els('authorizeCreateDailyCounters').checked,false);
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
+test('created SP daily counter stays attached to Notion definition even if board-day title changes',async()=>{
+  const definitionId='11111111111141118111111111111111';
+  const id='alfn-'+definitionId;
+  const env=await dailyBoardPreviewEnv([
+    aDailyBoardRow('day-row','Renamed daily habit','2026-11-16',definitionId)
+  ],true);
+  env.counters[id]={id,title:'Original imported title',
+    type:'ClickCounter',isEnabled:true,countOnDay:{'2026-11-16':2}};
+  await env.els('quickPreviewHabits').events.click();
+  assert.equal(env.els('dailyHabitRows').children[0].children[4].textContent,
+    'Original imported title');
+  assert.equal(env.els('dailyHabitRows').children[0].children[5].textContent,'2');
+  assert.equal(env.requests.filter(x=>x.opts.method==='PATCH').length,0);
+});
+
 test('duplicate daily occurrences for one habit/day stay visible but unlinked',async()=>{
   const env=await dailyBoardPreviewEnv([
     aDailyBoardRow('row1','Read 20m','2026-11-16','sameDef'),

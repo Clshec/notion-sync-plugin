@@ -62,6 +62,127 @@ function alfHostNotionMethodAllowed(path, method, body) {
   );
 }
 
+// Reserved, deterministic IDs make a reviewed retry idempotent and keep
+// original Notion definition identity separate from the day-row identity.
+function alfDailySpCounterId(definitionId) {
+  const id=alfNormalizeId(definitionId);
+  return id ? 'alfn-'+id : '';
+}
+function alfHostPinnedPageProperty(page, binding, sourceId) {
+  if(!binding || typeof binding.id!=='string' ||
+     alfNormalizeId(binding.sourceId)!==sourceId)return null;
+  const matches=Object.values(page&&page.properties||{}).filter(
+    (p)=>p&&p.id===binding.id);
+  return matches.length===1?matches[0]:null;
+}
+async function alfCreateReviewedDailyCounter(api,args) {
+  if(!args || Object.keys(args).sort().join(',')!==
+      'day,definitionId,pageId,title' ||
+     !/^\d{4}-\d{2}-\d{2}$/.test(args.day||'') ||
+     typeof args.title!=='string' || !args.title.trim() ||
+     args.title.length>160)throw new Error('Invalid reviewed daily counter request');
+  const counterId=alfDailySpCounterId(args.definitionId);
+  const pageId=alfNormalizeId(args.pageId);
+  if(!counterId||!pageId)throw new Error('Invalid original Notion identity');
+  const ctx=await api.getDayContext();
+  if(!ctx || ctx.todayStr!==args.day)
+    throw new Error('SP logical day changed; review today again');
+  const configRaw=await api.loadSyncedData('alf-mapping-v2');
+  const config=configRaw?JSON.parse(configRaw):null;
+  if(!config||!config.alfProfile ||
+     config.alfProfile.name!=='alf-life-os')
+    throw new Error('Verified Alf mapping required');
+  const sourceId=alfNormalizeId(config.taskSource);
+  const occ=config.habitPropertyBindings&&config.habitPropertyBindings.occurrences;
+  const task=config.taskPropertyBindings;
+  if(!sourceId||!occ||!task)
+    throw new Error('Pinned board properties required');
+  const token=await api.getSecret('alf-notion-token');
+  if(!token)throw new Error('Local Notion token is missing');
+  const request=async(path,method='GET',body)=>{
+    const opts={method,headers:{Authorization:'Bearer '+token,
+      'Notion-Version':'2026-03-11','Content-Type':'application/json'},
+      timeout:30000,responseType:'json'};
+    if(body!==undefined)opts.body=body;
+    return api.request('https://api.notion.com/v1'+path,opts);
+  };
+  const page=await request('/pages/'+pageId);
+  if(!page||page.object!=='page'||page.in_trash ||
+     alfNormalizeId(page.id)!==pageId ||
+     alfNormalizeId(page.parent&&page.parent.data_source_id)!==sourceId)
+    throw new Error('Original daily board page moved or unavailable');
+  const title=alfHostPinnedPageProperty(page,task.titleProp,sourceId);
+  const type=alfHostPinnedPageProperty(page,occ.habitOccTypeProp,sourceId);
+  const day=alfHostPinnedPageProperty(page,occ.habitOccDayProp,sourceId);
+  const relation=alfHostPinnedPageProperty(page,occ.habitOccRelationProp,sourceId);
+  const originalTitle=title&&title.type==='title' ?
+    (title.title||[]).map(t=>t.plain_text||t.text&&t.text.content||'').join('') : '';
+  if(originalTitle!==args.title ||
+     !type || type.type!=='multi_select' ||
+     !(type.multi_select||[]).some(x=>x.name==='عادة') ||
+     !day || day.type!=='date'||!day.date ||
+     day.date.start!==args.day||day.date.end ||
+     !relation||relation.type!=='relation' ||
+     !Array.isArray(relation.relation)||relation.relation.length!==1 ||
+     alfNormalizeId(relation.relation[0].id)!==alfNormalizeId(args.definitionId))
+    throw new Error('Daily board title/type/date/relation changed; review again');
+  // All records for this day must be seen. Never choose one page from a
+  // truncated inventory, or create against duplicated daily occurrences.
+  const filter={and:[
+    {property:occ.habitOccTypeProp.id,multi_select:{contains:'عادة'}},
+    {property:occ.habitOccDayProp.id,date:{equals:args.day}}
+  ]};
+  let cursor=null,total=0,matched=0,found=false,sameTitle=0;
+  const seenCursors=new Set();
+  const normalizedTitle=s=>s.normalize('NFKC').trim().replace(/\s+/gu,' ').toLowerCase();
+  do {
+    const body={filter,page_size:100};
+    if(cursor)body.start_cursor=cursor;
+    const data=await request('/data_sources/'+sourceId+'/query','POST',body);
+    if(!data||!Array.isArray(data.results) ||
+       data.has_more && (!data.next_cursor||seenCursors.has(data.next_cursor)))
+      throw new Error('Incomplete daily board inventory');
+    for(const row of data.results){
+      total++;
+      const rowTitle=alfHostPinnedPageProperty(row,task.titleProp,sourceId);
+      const text=rowTitle&&rowTitle.type==='title'
+        ?(rowTitle.title||[]).map(t=>t.plain_text||t.text&&t.text.content||'').join('')
+        :'';
+      if(text&&normalizedTitle(text)===normalizedTitle(args.title))sameTitle++;
+      const rel=alfHostPinnedPageProperty(row,occ.habitOccRelationProp,sourceId);
+      if(rel&&rel.type==='relation'&&Array.isArray(rel.relation)&&
+         rel.relation.some(x=>alfNormalizeId(x.id)===alfNormalizeId(args.definitionId))){
+        matched++;
+        if(alfNormalizeId(row.id)===pageId)found=true;
+      }
+    }
+    if(total>=300 && data.has_more)
+      throw new Error('Daily board inventory truncated');
+    cursor=data.has_more?data.next_cursor:null;
+    if(cursor)seenCursors.add(cursor);
+  }while(cursor);
+  if(matched!==1||!found||sameTitle!==1)
+    throw new Error('Duplicate/moved/ambiguous daily habit; counter not created');
+  const all=await api.getAllSimpleCounters();
+  if(!Array.isArray(all))throw new Error('SP counter inventory unavailable');
+  if(all.some(x=>x&&x.id!==counterId&&normalizedTitle(x.title||'')===normalizedTitle(args.title)))
+    throw new Error('Existing SP counter title already present; use it instead');
+  const existing=all.find(x=>x&&x.id===counterId);
+  if(existing&&existing.type!=='ClickCounter')
+    throw new Error('Reserved counter ID belongs to a different counter type');
+  // SP 20's setCounter() creates missing counters via the NON-PERSISTENT
+  // upsertSimpleCounter action. That briefly looks successful, but the new
+  // counter disappears after op-log hydration / SuperSync restart. Creating
+  // one here is DATA LOSS, not a usable sync. Only native Habits UI uses the
+  // persistent addSimpleCounter action; it can then be matched by unique name.
+  // Never issue a non-persistent create, even with explicit checkbox consent.
+  if(!existing)
+    throw new Error('SP 20 counter creation is non-persistent; use native Habits and re-preview');
+  if(existing.title!==args.title)
+    throw new Error('Reserved SP counter title differs; no rename permitted');
+  return {counterId,created:false};
+}
+
 // Zero-config ALF profile. Names/types/relations are the schema contract,
 // NEVER hard-coded tenant data-source IDs. Search sees only shared sources.
 const ALF_EXPECTED_SOURCE_TITLES = Object.freeze({
@@ -265,6 +386,7 @@ async function alfDiscoverProfile(api) {
 }
 
 function alfCreateHostRpcHandler(api, doc) {
+  const inflightCounters=new Set();
   return async function onAlfIframeMessage(event) {
     const req = event && event.data;
     if (!req || req.channel !== ALF_HOST_RPC_CHANNEL ||
@@ -297,6 +419,16 @@ function alfCreateHostRpcHandler(api, doc) {
         if (Object.keys(args).length)
           throw new Error('Unsupported Alf discovery options');
         value=await alfDiscoverProfile(api);
+      } else if (req.op === 'createDailyCounter') {
+        const target=alfDailySpCounterId(args.definitionId);
+        if(!target||inflightCounters.has(target))
+          throw new Error('Counter import in progress; refresh preview');
+        inflightCounters.add(target);
+        try {
+          value=await alfCreateReviewedDailyCounter(api,args);
+        }finally{
+          inflightCounters.delete(target);
+        }
       } else if (req.op === 'notion') {
         const method = args.method || 'GET';
         if (!alfHostNotionMethodAllowed(args.path, method, args.body))
