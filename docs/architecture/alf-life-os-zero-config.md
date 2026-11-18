@@ -16,6 +16,8 @@ Missing SP Habit Tracker counters are **not created** by this revision. Official
 
 The repository uses [`.woodpecker.yaml`](../../.woodpecker.yaml) for Node 22 syntax and regression tests on the user's own Woodpecker service. The former GitHub Actions `mapping-tests.yml` was removed. No live Notion token is passed into CI and no CI test touches personal data. The GitHub repository must be activated in the live Woodpecker instance and a real pipeline must finish successfully before claiming self-hosted acceptance; local checks alone do not suffice.
 
+**Platform security contract (confirmed against Clshec/gumacu GitOps on 2026-11-18):** `ci.gumacu.com` HTTP 404 and the absence of public Woodpecker HTTPRoute/Ingress are **intentional**, NOT a CI outage. The Woodpecker UI is internal-only; the only external integration is a signed GitHub webhook `POST https://api.gumacu.com/api/hook` behind APISIX. Do NOT expose the UI, create public ingress or use an unsigned webhook as a workaround. Woodpecker server and Agent pods were Running on Netcup, but the Alf repository activation and a completed Woodpecker job have not been independently verified; private operator authentication/approved repo activation remain required.
+
 **Status (2026-11-17): implemented, live Windows Notion read-only connection accepted for v0.30, v0.31 task preview filtering/pagination added; Android and real writeback remain separate gates.** This document supersedes the upstream English-schema configuration instructions for the Alf profile. The plugin remains an MIT fork of Alessio Lovato's original.
 
 ## Product contract — exactly one user input
