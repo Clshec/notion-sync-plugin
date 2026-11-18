@@ -72,6 +72,8 @@ code {font:inherit;white-space:nowrap}
       <thead><tr><th>سجل اللوح</th><th>يوم التنفيذ</th><th>حالة Notion</th><th>مرجع العادة</th><th>عداد SP الموجود</th><th>نشاط اليوم</th></tr></thead>
       <tbody id="dailyHabitRows"></tbody>
     </table></div>
+    <label><input type="checkbox" id="authorizeCreateDailyCounters"> أوافق على إنشاء عدادات ClickCounter الناقصة فقط بعد مراجعة سجلات اليوم المعروضة. لن تتغير بيانات Notion.</label>
+    <button id="createDailyCountersBtn">إنشاء العدادات الناقصة من سجلات اليوم (مراجعة صريحة)</button>
     <p class="muted"><small>العادات المطلوب تنفيذها تأتي فقط من سجلات «عادة» في اللوح بتاريخ يوم Super Productivity. «قاعدة العادات» مرجع للتعريف فقط. هذه معاينة لا تُنشئ عدادات أو تغيّر بيانات.</small></p>
   </div>
   <p class="muted"><small>لو ظهرت رسالة عن صلاحيات Notion، افتح قواعد البيانات الأصلية واختر Connections ثم أضف تكامل ألف إليها؛ لا توجد بيانات تقنية أخرى مطلوبة.</small></p>
@@ -450,7 +452,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['connectAuto','quickPreviewTasks','quickPreviewHabits','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['connectAuto','quickPreviewTasks','quickPreviewHabits','createDailyCountersBtn','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -531,6 +533,7 @@ code {font:inherit;white-space:nowrap}
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
       putForm(discovery.config);
       lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;dailyHabitPreview=null;
+      ui('authorizeCreateDailyCounters').checked=false;
       ui('dailyHabitRows').replaceChildren();ui('dailyHabitsSection').hidden=true;
       nextTaskPreviewCursor=null;ui('nextPreviewBtn').hidden=true;
       stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;
@@ -2004,6 +2007,15 @@ code {font:inherit;white-space:nowrap}
       if(!habitId ||
          (groups.get(normalizedUUID(habitId)+':'+day)||[]).length!==1)return;
       var key=habitMatchKey(textValue(taskProperty(page,c,'titleProp')));
+      // Previously imported counters have immutable Notion-definition IDs.
+      // A later daily title edit cannot detach their original identity.
+      var generatedId='alfn-'+normalizedUUID(habitId);
+      var existing=counters&&counters[generatedId];
+      if(existing && existing.type==='ClickCounter' &&
+         key && names.get(key)===1) {
+        links.set(page.id,generatedId);
+        return;
+      }
       if(key && names.get(key)===1 && counterNames.get(key)===1)
         links.set(page.id,byCounterName.get(key).id);
     });
@@ -2020,6 +2032,7 @@ code {font:inherit;white-space:nowrap}
     if(active)return;
     busy(true);
     dailyHabitPreview=null;
+    ui('authorizeCreateDailyCounters').checked=false;
     ui('dailyHabitRows').replaceChildren();
     ui('dailyHabitsSection').hidden=false;
     ui('dailyHabitsReport').textContent='جاري فحص سجلات عادات اليوم من اللوح…';
@@ -2088,6 +2101,82 @@ code {font:inherit;white-space:nowrap}
       ui('dailyHabitsReport').textContent='تعذر التحقق من سجلات اليوم دون تغيير أي بيانات.';
       fail(e);
     }finally{busy(false);}
+  }
+  async function createReviewedDailyCounters() {
+    if(active)return;
+    busy(true);
+    var created=0,failed=0;
+    try {
+      if(!ui('authorizeCreateDailyCounters').checked)
+        throw new Error('Review the daily board rows and approve missing counters first');
+      var c=getForm(),prior=dailyHabitPreview;
+      if(!c.alfProfile || c.alfProfile.name!=='alf-life-os' ||
+         !prior||prior.config!==JSON.stringify(c)||
+         prior.sourceId!==dataSourceId(c.taskSource,false))
+        throw new Error('Current reviewed Alf board preview is required');
+      var ctx=await PluginAPI.getDayContext();
+      if(!ctx || ctx.todayStr!==prior.day)
+        throw new Error('SP logical day changed; preview habits again');
+      var source=await notion('/data_sources/'+encodeURIComponent(prior.sourceId));
+      var schema=source&&source.properties||{};
+      validateOccurrenceMapping(schema,c,false);
+      var fresh=await queryExistingHabitDay(c,prior.day,prior.sourceId,schema,false);
+      var matches=fresh.filter(function(p){return occurrenceMatches(p,c,prior.day);});
+      var groups=habitDayCandidates(matches,c,prior.day);
+      var state=await PluginAPI.getAppState(),counters=state&&state.simpleCounters||{};
+      var links=uniqueDailyCounterLinks(matches,c,prior.day,counters);
+      if(matches.length!==prior.candidates.length)
+        throw new Error('Daily habit inventory changed; preview again');
+      var names=new Map(),freshIds=new Set();
+      matches.forEach(function(p){
+        var key=habitMatchKey(textValue(taskProperty(p,c,'titleProp')));
+        if(key)names.set(key,(names.get(key)||0)+1);
+        if(freshIds.has(p.id))throw new Error('Repeated daily page');
+        freshIds.add(p.id);
+      });
+      var missing=[];
+      for(var candidate of prior.candidates) {
+        var page=matches.find(function(p){return p.id===candidate.pageId;});
+        var definition=page&&habitRelId(page,c);
+        var title=page&&textValue(taskProperty(page,c,'titleProp'));
+        if(!page||title!==candidate.title||
+           (definition||null)!==(candidate.definitionId||null)||
+           statusValue(taskProperty(page,c,'statusProp'))!==candidate.status||
+           links.get(page.id)!==(candidate.counterId||undefined))
+          throw new Error('Habit/Status/counter changed; preview again');
+        if(!candidate.counterId) {
+          if(!definition ||
+             (groups.get(normalizedUUID(definition)+':'+prior.day)||[]).length!==1 ||
+             !title||title.length>160||names.get(habitMatchKey(title))!==1)
+            throw new Error('Ambiguous or unsupported daily habit; no counter created');
+          missing.push(candidate);
+        }
+      }
+      if(!missing.length) {
+        ui('dailyHabitsReport').textContent='كل سجلات اليوم لها عدادات موجودة أو مرتبطة؛ لا حاجة لإنشاء عدادات.';
+        return;
+      }
+      // Host independently re-reads original Notion page + ALL daily rows
+      // before each local counter creation. No Notion PATCH or task import.
+      for(var entry of missing) {
+        try {
+          await alfHostRpc('createDailyCounter',{pageId:entry.pageId,
+            definitionId:entry.definitionId,day:prior.day,title:entry.title});
+          created++;
+        }catch(e) {
+          failed++;
+        }
+      }
+      ui('dailyHabitsReport').textContent=
+        'طلب إنشاء '+missing.length+' عداد من السجلات الحالية: '+
+        created+' تم تأكيدها، '+failed+
+        ' تعذر التحقق منها. اعرض عادات اليوم مجددًا للتأكد. لم تتغير بيانات Notion.';
+    }catch(e){fail(e);}
+    finally{
+      dailyHabitPreview=null;
+      ui('authorizeCreateDailyCounters').checked=false;
+      busy(false);
+    }
   }
   function uniqueHabitCounterSuggestions(habits,counters,c) {
     var habitCounts=new Map(),counterCounts=new Map(),counterByKey=new Map();
@@ -2796,6 +2885,7 @@ code {font:inherit;white-space:nowrap}
     ui('quickPreviewHabits').addEventListener('click',async function(){
       await previewDailyBoardHabits();
     });
+    ui('createDailyCountersBtn').addEventListener('click',createReviewedDailyCounters);
     ui('save').addEventListener('click',save);
     ui('disconnect').addEventListener('click',disconnect);
     ui('schemaBtn').addEventListener('click',inspect);

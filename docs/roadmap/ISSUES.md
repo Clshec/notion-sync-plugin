@@ -4,6 +4,10 @@
 
 Notion tracking reference: https://app.notion.com/p/41ab4a624b7d81dbbc28e1c57279f725 .
 
+## v0.34 experimental — reviewed missing daily habit counters
+
+Implemented on a branch stacked over v0.33: the daily board review can request creation of missing *local SP* ClickCounters only after separate approval, using the original Notion definition UUID as a stable ID. The trusted host revalidates the page/day/relation/title and complete daily-day uniqueness before each create; no Notion writes. Existing counters are never reset or renamed. This must pass self-hosted Woodpecker and a disposable real SP 20 Windows profile before production activation. Outstanding: first live host acceptance, safe automatic daily scheduling/reconciliation, Windows/Android / SuperSync L5, and production Pomodoro ledger acceptance. Leave PR #38 and this follow-up unmerged until a real Woodpecker run can be independently verified.
+
 ## P0 — v0.33: original board's DAILY habits + Woodpecker-only CI
 
 **Implemented in this branch:** quick button now reads only original `اللوح` rows with `نوع الصفحة` containing `عادة` and date-only `يوم التنفيذ` equal to SP logical day. The daily record's page ID, date and exactly one `قاعدة العادات` Relation provide identity. Match an existing SP counter by the *board-day title* only when unique. The definitions database is no longer the daily execution feed; the optional old definition preview is Advanced-only. Mixed habit/task page is excluded from all Alf task import and automatic task/time engines. Reviewed habit Status staging uses daily board name/counter with fresh checks, without requiring manually saved definition links. Old definition-based Alf background Number export blocked.

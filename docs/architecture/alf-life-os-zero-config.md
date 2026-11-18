@@ -1,4 +1,12 @@
-# Alf Life OS → Super Productivity: zero-configuration connection (v0.33)
+# Alf Life OS → Super Productivity: zero-configuration connection (v0.34 experimental)
+
+## v0.34 — explicit import of missing SP daily counters (not yet live accepted)
+
+Source of truth remains the **original dated اللوح record**. The daily preview compares its unique existing definition Relation and title against the current Super Productivity counter inventory. After the user reviews that exact day's rows, a separate checkbox and button may request local SP **ClickCounter** creation for records with no matching existing counter. No Notion page, database, property or Status is created or updated by this import. It is OFF on onboarding; only the approved foreground action can invoke it.
+
+The trusted same-plugin host RPC handles each counter creation, rather than exposing a general-purpose SP state mutation API to the iframe. The host re-reads the exact original Notion page by its stable ID, verifies pinned board Title / Type / Date / Relation property IDs, checks the same SP logical day and complete daily inventory, refuses duplicates/moved rows or ambiguous titles, then checks current SP counters for collisions. Counter ID is deterministically `alfn-` plus the normalized **original Notion definition UUID**; this is stable across future daily rows. Import starts at zero using the official SP 20 `setCounter` (which upserts if absent), then names the new counter via `updateSimpleCounter`. It must **never** call `setCounter` for an existing counter, as that would erase its present-day count; there is a recheck and an in-flight ID lock. An interrupted first rename is repairable without resetting counts.
+
+Daily read-only previews prefer a known counter with that stable imported ID even if its user-facing name subsequently changed. Existing uniquely matching ordinary SP counters remain usable without migration or overwrite. This is **not** automatic daily schedule generation, a verified completed-Pomodoro ledger, mobile SuperSync acceptance, or automated Notion Status writeback. The original Alf automatic habit Number writer remains blocked; explicit, reviewed Status writeback stays separate. Synthetic Node coverage does not establish real Windows SP/plugin-host acceptance. All production data changes are deferred pending user validation and Woodpecker CI.
 
 ## v0.33: Daily board records, NOT definitions, drive habit execution
 
