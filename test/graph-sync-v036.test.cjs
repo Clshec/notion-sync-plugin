@@ -322,3 +322,105 @@ test('independent same-title SP and Notion tasks in one project are conflicts, n
   assert.equal(p.exportsTasks.some(t=>t.spId==='sp-unlinked'),false);
   assert.ok(p.skipped.conflicts>=2);
 });
+function pomodoroJournalFixture(){
+  const x=sample();
+  x.tasks=[x.tasks[1]];
+  const dashed=child.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,
+    '$1-$2-$3-$4-$5');
+  x.spActive=[{id:'linked-sp-task',title:'Child A',projectId:'some-project',
+    notes:'Personal note\nalf-notion-page-id:'+dashed,
+    isDone:false,subTaskIds:[]}];
+  const f=fixture(x);
+  const session={schemaVersion:1,sessionId:'pomo-session-1',
+    taskId:'linked-sp-task',mode:'Pomodoro',
+    automatic:true,manual:false,observedCompletion:true,
+    verifiedCompletedPomodoro:true,source:'live-sp-action-hook',
+    startedAt:1763500000000,endedAt:1763501500000};
+  f.saved.set('alf-focus-observed-v1-'+session.sessionId,JSON.stringify(session));
+  f.api.listSyncedDataKeys=async prefix=>[...f.saved.keys()].filter(
+    key=>key.startsWith(prefix));
+  const plan={links:{tasks:new Map([[child,'linked-sp-task']])}};
+  const remoteBlocks=[];
+  f.api.request=async(uri,opts)=>{
+    f.events.push(['notion',uri,opts.method,opts.body]);
+    if(uri.endsWith('/pages/'+child)&&opts.method==='GET')
+      return row(child,'Child A',['مهمة'],small,bundle);
+    if(uri.includes('/blocks/'+child+'/children')&&opts.method==='GET')
+      return {object:'list',results:remoteBlocks,has_more:false,next_cursor:null};
+    if(uri.endsWith('/blocks/'+child+'/children')&&opts.method==='PATCH'){
+      const sent=opts.body.children[0];
+      const line=sent.paragraph.rich_text[0].text.content;
+      const block={object:'block',type:'paragraph',
+        paragraph:{rich_text:[{type:'text',plain_text:line}]}};
+      remoteBlocks.push(block);
+      return {object:'list',results:[block],has_more:false};
+    }
+    throw new Error('Unexpected Notion Pomodoro test endpoint');
+  };
+  return {x,f,session,plan,remoteBlocks};
+}
+test('verified completed focus session appends once to existing Notion page without editing task content',async()=>{
+  const o=pomodoroJournalFixture();
+  const first=await run('alfGraphApplyPomodoro',o.f.api,o.x,o.plan);
+  assert.equal(first.written,1);
+  assert.equal(first.linked,1);
+  const writes=o.f.events.filter(e=>e[0]==='notion'&&e[2]==='PATCH');
+  assert.equal(writes.length,1);
+  assert.equal(writes[0][1].endsWith('/blocks/'+child+'/children'),true);
+  const body=writes[0][3];
+  assert.equal(body.children.length,1);
+  assert.equal(body.children[0].type,'paragraph');
+  assert.match(body.children[0].paragraph.rich_text[0].text.content,
+    /ALF-POMODORO-SESSION-V1:pomo-session-1/);
+  assert.equal(o.f.events.some(e=>e[1]?.includes('/pages/')&&e[2]==='PATCH'),false);
+  const again=await run('alfGraphApplyPomodoro',o.f.api,o.x,o.plan);
+  assert.equal(again.written,0);
+  assert.equal(again.alreadyPresent,1);
+  assert.equal(o.f.events.filter(e=>e[0]==='notion'&&e[2]==='PATCH').length,1);
+});
+test('unknown Notion block append outcome is journalled before request and never retried',async()=>{
+  const o=pomodoroJournalFixture();
+  const request=o.f.api.request;
+  let attempts=0;
+  o.f.api.request=async(uri,opts)=>{
+    if(uri.includes('/blocks/')&&opts.method==='PATCH'){
+      attempts++;
+      throw new Error('network lost after Notion may have appended');
+    }
+    return request(uri,opts);
+  };
+  const first=await run('alfGraphApplyPomodoro',o.f.api,o.x,o.plan);
+  assert.equal(first.written,0);
+  assert.equal(first.pending,1);
+  const intent=JSON.parse(o.f.saved.get('alf-pomo-block-v1-pomo-session-1'));
+  assert.equal(intent.status,'attempted');
+  const again=await run('alfGraphApplyPomodoro',o.f.api,o.x,o.plan);
+  assert.equal(again.written,0);
+  assert.equal(again.pending,1);
+  assert.equal(attempts,1);
+});
+test('a remotely existing Pomodoro marker is reconciled without duplicate append',async()=>{
+  const o=pomodoroJournalFixture();
+  o.remoteBlocks.push({object:'block',type:'paragraph',
+    paragraph:{rich_text:[{plain_text:
+      '✅ Existing completed session | ALF-POMODORO-SESSION-V1:pomo-session-1'}]}});
+  const result=await run('alfGraphApplyPomodoro',o.f.api,o.x,o.plan);
+  assert.equal(result.alreadyPresent,1);
+  assert.equal(result.written,0);
+  assert.equal(o.f.events.filter(e=>e[0]==='notion'&&e[2]==='PATCH').length,0);
+  const entry=JSON.parse(o.f.saved.get('alf-pomo-block-v1-pomo-session-1'));
+  assert.equal(entry.status,'committed');
+});
+test('manual, unverified or unlinked focus completions can never create Notion page blocks',async()=>{
+  const o=pomodoroJournalFixture();
+  o.f.saved.set('alf-focus-observed-v1-pomo-session-1',
+    JSON.stringify({...o.session,manual:true}));
+  const bad=await run('alfGraphApplyPomodoro',o.f.api,o.x,o.plan);
+  assert.equal(bad.written,0);
+  assert.equal(o.f.events.filter(e=>e[0]==='notion').length,0);
+  o.f.saved.set('alf-focus-observed-v1-pomo-session-1',
+    JSON.stringify({...o.session,manual:false,taskId:'wrong-task'}));
+  const unlinked=await run('alfGraphApplyPomodoro',o.f.api,o.x,o.plan);
+  assert.equal(unlinked.written,0);
+  assert.equal(o.f.events.filter(e=>e[0]==='notion').length,0);
+});
