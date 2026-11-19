@@ -13,7 +13,7 @@ const ALF_HOST_RPC_CHANNEL = 'alf-notion-host-rpc-v1';
 const ALF_OWN_IFRAME_MARKER =
   '<meta name="alf-plugin-owner" content="alf-notion-super-productivity">';
 const ALF_LOCAL_RPC_KEY_RE =
-  /^alf-(?:notion-token|auto-plan-local-enabled-v1|auto-time-local-enabled-v1|auto-habit-local-enabled-v1|auto-habit-local-scope-v1|auto-graph-local-enabled-v1|auto-graph-parent-v1|auto-status-local-v1-(?:planning|time|habits|graph))$/;
+  /^alf-(?:notion-token|auto-plan-local-enabled-v1|auto-time-local-enabled-v1|auto-habit-local-enabled-v1|auto-habit-local-scope-v1|auto-graph-local-enabled-v1|auto-graph-parent-v1|auto-pomo-log-local-enabled-v1|auto-status-local-v1-(?:planning|time|habits|graph))$/;
 
 function alfHostRpcOwnsSource(source, doc) {
   if (!source || !doc || typeof doc.querySelectorAll !== 'function') return false;
@@ -438,7 +438,7 @@ function alfCreateHostRpcHandler(api, doc) {
           inventory,plan};
         value=alfGraphPublicReview(plan);
       } else if (req.op === 'graphApply') {
-        if(!['import','export'].includes(args.mode) ||
+        if(!['import','export','pomodoro'].includes(args.mode) ||
             !Object.keys(args).every(k=>['fingerprint','mode','upperParentId'].includes(k)) ||
             args.fingerprint!==
             (graphReview&&graphReview.fingerprint) ||
@@ -454,7 +454,9 @@ function alfCreateHostRpcHandler(api, doc) {
           throw new Error('Graph changed after review; no writes');
         value=args.mode==='import'?
           await alfGraphApplyLocal(api,current,fresh):
-          await alfGraphApplyRemote(api,current,fresh,args.upperParentId);
+          args.mode==='export'?
+            await alfGraphApplyRemote(api,current,fresh,args.upperParentId):
+            await alfGraphApplyPomodoro(api,current,fresh);
       } else if (req.op === 'notion') {
         const method = args.method || 'GET';
         if (!alfHostNotionMethodAllowed(args.path, method, args.body))
@@ -1760,10 +1762,15 @@ function alfGraphFingerprint(signature){
 async function alfGraphPlan(api,inventory){
   const {projects,tasks,spProjects,spActive,spArchive}=inventory;
   const projectLinks=new Map(),taskLinks=new Map();
-  const skipped={projects:0,tasks:0,conflicts:0};
+  // Aggregated, non-identifying eligibility diagnostics from actual original
+  // source rows. A total skipped count alone hides systemic mapping errors.
+  const skipped={projects:0,tasks:0,conflicts:0,reasons:{
+    title:0,multiProject:0,unknownProject:0,multiParent:0,
+    status:0,estimate:0,oldDone:0,missingLinkedTask:0,
+    incompleteIdentity:0,other:0}};
   const actions={projects:[],tasks:[],exportsProjects:[],
     exportsTasks:[],upperChoices:inventory.upperChoices||[],skipped,
-    observedFocus:[]};
+    observedFocus:[],scannedTasks:tasks.length};
   const mappedSp=new Set();
   for(const p of projects) {
     const raw=await api.loadSyncedData(ALF_GRAPH_PROJECT_LINK_PREFIX+p.id);
@@ -1793,12 +1800,13 @@ async function alfGraphPlan(api,inventory){
   }
   const active=[...spActive,...spArchive],seenTasks=new Set();
   for(const t of tasks) {
-    if(!t.title||t.title.length>250||t.projects.length>1||
-       (t.projects.length===1&&!projects.some(p=>p.id===t.projects[0]))||
-       t.parents.length>1||!['Done','Not started','In progress'].includes(t.status)||
-       (t.estimateMs!==null&&!Number.isSafeInteger(t.estimateMs))){
-      skipped.tasks++;continue;
-    }
+    const failure=(!t.title||t.title.length>250)?'title':
+      t.projects.length>1?'multiProject':
+      (t.projects.length===1&&!projects.some(p=>p.id===t.projects[0]))?'unknownProject':
+      t.parents.length>1?'multiParent':
+      !['Done','Not started','In progress','Planned'].includes(t.status)?'status':
+      (t.estimateMs!==null&&!Number.isSafeInteger(t.estimateMs))?'estimate':null;
+    if(failure){skipped.tasks++;skipped.reasons[failure]++;continue;}
     const claims=active.filter(sp=>alfGraphTaskClaim(sp,t.id));
     const raw=await alfGraphExistingTaskLink(api,t.id);
     const link=raw?JSON.parse(raw):null;
@@ -1816,11 +1824,12 @@ async function alfGraphPlan(api,inventory){
       }
       // Marker-only candidates are not authorized for automatic status or
       // time writeback until an independently saved ID link exists.
-      if(!link){skipped.tasks++;continue;}
+      if(!link){skipped.tasks++;skipped.reasons.incompleteIdentity++;continue;}
       seenTasks.add(existing[0].id);taskLinks.set(t.id,existing[0].id);
       continue;
     }
-    if(link||t.status==='Done'){skipped.tasks++;continue;}
+    if(link){skipped.tasks++;skipped.reasons.missingLinkedTask++;continue;}
+    if(t.status==='Done'){skipped.tasks++;skipped.reasons.oldDone++;continue;}
     const pendingAdopt=actions.projects.find(p=>
       p.id===t.projects[0]&&p.adoptSpId);
     const potentialProject=t.projects.length===0?'INBOX_PROJECT':
@@ -1941,6 +1950,7 @@ function alfGraphPublicReview(p){
     observedFocus:p.observedFocus.slice(0,40),
     upperChoices:p.upperChoices,
     totals:{projects:p.projects.length,tasks:p.tasks.length,
+      scannedTasks:p.scannedTasks,
       exportProjects:p.exportsProjects.length,
       exportTasks:p.exportsTasks.length,
       linkedObservedPomodoroTasks:p.observedFocus.length,
@@ -2022,6 +2032,7 @@ const ALF_GRAPH_TASK_INTENT_PREFIX='alf-graph-task-export-v1-';
 const ALF_GRAPH_STATUS_ANCHOR_PREFIX='alf-graph-status-v1-';
 const ALF_GRAPH_AUTO_KEY='alf-auto-graph-local-enabled-v1';
 const ALF_GRAPH_AUTO_PARENT_KEY='alf-auto-graph-parent-v1';
+const ALF_POMO_AUTO_KEY='alf-auto-pomo-log-local-enabled-v1';
 function alfGraphSpId(id){
   if(typeof id!=='string'||!id||id.length>120||/\s/.test(id))
     throw new Error('Invalid SP entity identity');
@@ -2224,6 +2235,161 @@ async function alfGraphSyncStatuses(api,inventory,plan){
   }
   return stats;
 }
+// v0.37: append-only Pomodoro journal in the body of the EXISTING Notion
+// task page. No new property/database and no overwriting user-authored blocks.
+// This is a log of OBSERVED completions, not imported historical timer data.
+const ALF_POMO_BLOCK_MARKER='ALF-POMODORO-SESSION-V1:';
+const ALF_POMO_BLOCK_LEDGER='alf-pomo-block-v1-';
+function alfPomoVerifiedRecord(e,key){
+  return !!(e&&e.schemaVersion===1&&
+    typeof e.sessionId==='string'&&
+    /^[a-zA-Z0-9_-]{4,120}$/.test(e.sessionId)&&
+    key===ALF_FOCUS_KEY_PREFIX+e.sessionId&&
+    typeof e.taskId==='string'&&e.taskId&&
+    e.mode==='Pomodoro'&&e.automatic===true&&e.manual===false&&
+    e.verifiedCompletedPomodoro===true&&e.observedCompletion===true&&
+    e.source==='live-sp-action-hook'&&
+    Number.isSafeInteger(e.startedAt)&&e.startedAt>0&&
+    Number.isSafeInteger(e.endedAt)&&e.endedAt>=e.startedAt);
+}
+function alfPomoBlockText(record){
+  const start=new Date(record.startedAt).toISOString();
+  const end=new Date(record.endedAt).toISOString();
+  return '✅ Pomodoro completed in Super Productivity (observed) | '+
+    'UTC '+start+' → '+end+' | '+
+    ALF_POMO_BLOCK_MARKER+record.sessionId;
+}
+function alfPomoMarkerInBlock(block){
+  if(!block||typeof block.type!=='string')return '';
+  const r=block[block.type]&&block[block.type].rich_text;
+  if(!Array.isArray(r))return '';
+  const text=r.map(v=>v.plain_text||(v.text&&v.text.content)||'').join('');
+  const m=text.match(/ALF-POMODORO-SESSION-V1:([a-zA-Z0-9_-]{4,120})/);
+  return m?m[1]:'';
+}
+async function alfPomoReadRemoteSessionIds(api,token,pageId){
+  const ids=new Set(),seenCursors=new Set();
+  let cursor='';
+  // Paginate the full root block list; a truncated scan must never be used
+  // as evidence that a particular session marker is missing.
+  for(let n=0;n<15;n++){
+    const path='/blocks/'+pageId+'/children?page_size=100'+
+      (cursor?'&start_cursor='+encodeURIComponent(cursor):'');
+    const reply=await alfGraphRequest(api,token,path);
+    if(!reply||!Array.isArray(reply.results)||reply.results.length>100||
+       typeof reply.has_more!=='boolean')
+      throw new Error('Invalid Notion block list; no Pomodoro writes');
+    for(const b of reply.results){
+      const sid=alfPomoMarkerInBlock(b);
+      if(sid)ids.add(sid);
+    }
+    if(!reply.has_more)return ids;
+    if(typeof reply.next_cursor!=='string'||!reply.next_cursor||
+       seenCursors.has(reply.next_cursor))
+      throw new Error('Incomplete Notion block paging; no Pomodoro writes');
+    seenCursors.add(reply.next_cursor);cursor=reply.next_cursor;
+  }
+  throw new Error('Notion page has over 1500 top-level blocks; review manually');
+}
+async function alfGraphApplyPomodoro(api,inventory,plan){
+  const stats={scanned:0,linked:0,written:0,alreadyPresent:0,
+    pending:0,skipped:0,errors:0};
+  if(typeof api.listSyncedDataKeys!=='function'||
+     typeof api.persistDataSynced!=='function')
+    throw new Error('SP durable focus-session inventory unavailable');
+  const keys=await api.listSyncedDataKeys(ALF_FOCUS_KEY_PREFIX);
+  if(!Array.isArray(keys)||keys.length>2000)
+    throw new Error('Focus history inventory incomplete');
+  const targetByTask=new Map([...plan.links.tasks].map(([pageId,spId])=>[spId,pageId]));
+  const checkedPages=new Map(),seen=new Set();
+  let slots=3; // Bounded writes per single reviewed or automatic cycle.
+  for(const key of keys.sort()){
+    if(!slots)break;
+    stats.scanned++;
+    if(typeof key!=='string'||!key.startsWith(ALF_FOCUS_KEY_PREFIX))continue;
+    const raw=await api.loadSyncedData(key);
+    if(!raw){stats.skipped++;continue;}
+    let record;
+    try{record=JSON.parse(raw);}catch(_){stats.skipped++;continue;}
+    if(!alfPomoVerifiedRecord(record,key)||seen.has(record.sessionId)){
+      stats.skipped++;continue;
+    }
+    seen.add(record.sessionId);
+    const target=targetByTask.get(record.taskId);
+    if(!target){stats.skipped++;continue;}
+    const original=inventory.tasks.find(p=>p.id===target);
+    if(!original){stats.skipped++;continue;}
+    const spMatches=[...inventory.spActive,...inventory.spArchive].filter(
+      t=>t&&t.id===record.taskId&&alfGraphTaskClaim(t,target));
+    if(spMatches.length!==1){stats.skipped++;continue;}
+    stats.linked++;
+    const ledgerKey=ALF_POMO_BLOCK_LEDGER+record.sessionId;
+    const saved=await api.loadSyncedData(ledgerKey);
+    let ledger=null;
+    try{ledger=saved?JSON.parse(saved):null;}catch(_){stats.skipped++;continue;}
+    if(ledger&&(ledger.version!==1||ledger.sessionId!==record.sessionId||
+        ledger.taskId!==record.taskId||ledger.notionId!==target||
+        !['attempted','committed'].includes(ledger.status))){
+      stats.skipped++;continue;
+    }
+    if(ledger&&ledger.status==='committed'){stats.alreadyPresent++;continue;}
+    let attempted=false;
+    try{
+      if(!checkedPages.has(target)){
+        const page=await alfGraphRequest(api,inventory.token,'/pages/'+target);
+        if(!page||page.object!=='page'||page.in_trash||
+           alfGraphId(page.id)!==target||
+           alfGraphId(page.parent&&page.parent.data_source_id)!==
+             inventory.ids.board)
+          throw new Error('Notion Pomodoro target moved or missing');
+        const live=alfGraphItem(page,inventory.c);
+        if(!live||live.id!==target||live.title!==original.title)
+          throw new Error('Notion Pomodoro target changed since review');
+        checkedPages.set(target,await alfPomoReadRemoteSessionIds(
+          api,inventory.token,target));
+      }
+      const markers=checkedPages.get(target);
+      if(markers.has(record.sessionId)){
+        await api.persistDataSynced(JSON.stringify({version:1,status:'committed',
+          sessionId:record.sessionId,taskId:record.taskId,notionId:target}),
+        ledgerKey);
+        stats.alreadyPresent++;continue;
+      }
+      if(ledger){
+        // A previously attempted PATCH may have committed despite timeout.
+        // Never silently re-append if a complete remote scan finds no marker.
+        stats.pending++;continue;
+      }
+      await api.persistDataSynced(JSON.stringify({version:1,
+        status:'attempted',sessionId:record.sessionId,
+        taskId:record.taskId,notionId:target}),ledgerKey);
+      attempted=true;
+      slots--;
+      const line=alfPomoBlockText(record);
+      const reply=await alfGraphRequest(api,inventory.token,
+        '/blocks/'+target+'/children','PATCH',{children:[{
+          object:'block',type:'paragraph',paragraph:{rich_text:[{
+            type:'text',text:{content:line}
+          }]}
+        }]});
+      if(!reply||!Array.isArray(reply.results)||
+         reply.results.length!==1||
+         alfPomoMarkerInBlock(reply.results[0])!==record.sessionId)
+        throw new Error('Notion block append outcome unconfirmed');
+      markers.add(record.sessionId);
+      await api.persistDataSynced(JSON.stringify({version:1,status:'committed',
+        sessionId:record.sessionId,taskId:record.taskId,notionId:target}),
+      ledgerKey);
+      stats.written++;
+    }catch(_){
+      // If the ledger was written first, an error requires manual resolution.
+      stats.errors++;
+      if(attempted||ledger)stats.pending++;
+      else stats.skipped++;
+    }
+  }
+  return stats;
+}
 // Opt-in foreground/background-host reconciliation of NEW entities only.
 // Notion create POST is never retried after ambiguous failure. Other existing
 // engines own approved plan/time/habit fields; do not double-write them here.
@@ -2250,13 +2416,17 @@ function alfCreateAutoGraphSync(api,options={}){
       const upper=await api.getSecret(ALF_GRAPH_AUTO_PARENT_KEY)||'';
       const remote=await alfGraphApplyRemote(api,inventory,plan,upper);
       const statuses=await alfGraphSyncStatuses(api,inventory,plan);
+      const pomo=await api.getSecret(ALF_POMO_AUTO_KEY)==='enabled'?
+        await alfGraphApplyPomodoro(api,inventory,plan):
+        {written:0,pending:0,errors:0};
       result.processed=plan.projects.length+plan.tasks.length+
         plan.exportsProjects.length+plan.exportsTasks.length;
       result.written=local.projects+local.tasks+
-        remote.projects+remote.tasks+statuses.written;
-      result.skipped=local.skipped+remote.skipped+remote.pending+statuses.skipped;
+        remote.projects+remote.tasks+statuses.written+pomo.written;
+      result.skipped=local.skipped+remote.skipped+remote.pending+
+        statuses.skipped+pomo.pending;
       result.conflicts=plan.skipped.conflicts+statuses.conflicts;
-      result.errors=local.errors+remote.errors+statuses.errors;
+      result.errors=local.errors+remote.errors+statuses.errors+pomo.errors;
     }catch(_){result.errors++;}
     await alfStoreAutoStatus(api,'graph',result);
     return result;

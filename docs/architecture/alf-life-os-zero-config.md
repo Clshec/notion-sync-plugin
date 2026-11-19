@@ -1,4 +1,10 @@
-# Alf Life OS ↔ Super Productivity: zero-configuration connection (v0.36 experimental)
+# Alf Life OS ↔ Super Productivity: zero-configuration connection (v0.37 experimental)
+
+## v0.37 — live verified graph eligibility and original task-page Pomodoro log
+
+The actual SP 20 Windows profile and existing one-token Notion connection were used to read, not write, all three original life-OS work sources. Following a full host restart, 114 non-habit board work rows yielded 23 candidate open tasks/bundles and 22 small projects; 73 historic Done rows and 14 rows linked to unknown lower projects remain unimported deliberately, with two conflicts and two further invalid rows. No existing original Notion task data was changed. An independent temporary SP 20 user-data-dir profile proved that official native Project/Task/Subtask creation and parent relations persisted across a full restart; disposable test data was removed afterward, and main SP profile was restored.
+
+The proposed Pomodoro history representation is an **append-only paragraph** under the original Notion task page's existing content. This is not a new property/database and must not rewrite existing prose or blocks. Each session carries UTC observed start/end, successful automatic Pomodoro completion, and a per-session ALF-POMODORO-SESSION-V1 marker. The host verifies the original page, existing exact Notion-to-SP task link and complete paginated child block inventory, then stores a durable attempted ledger before a Notion append-block PATCH. An ambiguous network outcome is never retried automatically. A separately approved button and optional device-local graph-dependent auto mode are OFF by default. Old unobserved sessions cannot be backfilled from estimated/actual time. Actual live Notion append, Android, concurrent-device locking and Woodpecker CI are still release gates.
 
 ## v0.36 — original two-way project/task graph, NOT a new Notion schema
 

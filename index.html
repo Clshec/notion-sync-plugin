@@ -99,7 +99,16 @@ code {font:inherit;white-space:nowrap}
       <button id="graphAutoDisableBtn">إيقاف مزامنة الكيانات</button>
     </div>
     <p id="graphAutoStatus" role="status" aria-live="polite" class="muted">مغلقة افتراضيًا.</p>
-    <p class="muted"><small>سجل جلسات البومودورو الدقيق ليس له حقل مؤكد في «اللوح»، لذلك لن نختلق عددًا أو ننقل جلسات ناقصة على أنها كاملة.</small></p>
+    <details>
+      <summary>تسجيل البومودورو المكتمل داخل صفحة المهمة الأصلية (تجريبي)</summary>
+      <p class="muted">يسجل فقط جلسات Pomodoro التي رصدتها الإضافة مكتملة تلقائيًا أثناء تشغيل SP. يضيف فقرة ذات معرف فريد أسفل محتوى صفحة المهمة في Notion ولا يغير الشرح أو خصائص اللوح. لا يستطيع استرجاع الجلسات التاريخية التي لم يرصدها.</p>
+      <label><input type="checkbox" id="authorizePomoLog"> أوافق على إضافة سجلات جلسات البومودورو المرصودة إلى صفحات المهام الأصلية المعروضة فقط، بعد إعادة فحص كل صفحة والتأكد من عدم وجود نفس معرف الجلسة.</label>
+      <button id="graphPomoExportBtn">تسجيل الجلسات المراجعة في Notion (بحد أقصى 3)</button>
+      <p id="pomoLogStatus" role="status" aria-live="polite" class="muted">لم تُكتب جلسات. الإرسال التلقائي مغلق.</p>
+      <label><input type="checkbox" id="authorizePomoAuto"> أوافق أيضًا على حفظ الجلسات المكتملة تلقائيًا على هذا الجهاز فقط، بعد تفعيل محرك مزامنة المهام. لا إعادة محاولة لعمليات كتابة غير مؤكدة.</label>
+      <button id="pomoAutoEnableBtn">تفعيل سجل البومودورو التلقائي</button>
+      <button id="pomoAutoDisableBtn">إيقاف سجل البومودورو التلقائي</button>
+    </details>
   </div>
   <p class="muted"><small>لو ظهرت رسالة عن صلاحيات Notion، افتح قواعد البيانات الأصلية واختر Connections ثم أضف تكامل ألف إليها؛ لا توجد بيانات تقنية أخرى مطلوبة.</small></p>
 </section>
@@ -400,6 +409,7 @@ code {font:inherit;white-space:nowrap}
   var TOKEN_KEY = 'alf-notion-token';
   var GRAPH_AUTO_KEY='alf-auto-graph-local-enabled-v1';
   var GRAPH_AUTO_PARENT_KEY='alf-auto-graph-parent-v1';
+  var POMO_AUTO_KEY='alf-auto-pomo-log-local-enabled-v1';
   var AUTO_PLAN_ENABLED_KEY = 'alf-auto-plan-local-enabled-v1';
   var AUTO_PLAN_ANCHOR_PREFIX = 'alf-plan-anchor-v1-';
   var AUTO_TIME_ENABLED_KEY = 'alf-auto-time-local-enabled-v1';
@@ -482,7 +492,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['connectAuto','quickPreviewTasks','quickPreviewHabits','createDailyCountersBtn','graphPreviewBtn','graphApplyBtn','graphExportBtn','graphAutoEnableBtn','graphAutoDisableBtn','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['connectAuto','quickPreviewTasks','quickPreviewHabits','createDailyCountersBtn','graphPreviewBtn','graphApplyBtn','graphExportBtn','graphAutoEnableBtn','graphAutoDisableBtn','graphPomoExportBtn','pomoAutoEnableBtn','pomoAutoDisableBtn','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -545,6 +555,7 @@ code {font:inherit;white-space:nowrap}
         await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
         await alfUiDeleteSecret(GRAPH_AUTO_KEY);
         await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
+        await alfUiDeleteSecret(POMO_AUTO_KEY);
         await alfUiSetSecret(TOKEN_KEY,freshToken);
         ui('quickToken').value='';
       } else if (!await alfUiGetSecret(TOKEN_KEY)) {
@@ -562,6 +573,7 @@ code {font:inherit;white-space:nowrap}
       await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
       await alfUiDeleteSecret(GRAPH_AUTO_KEY);
       await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
+      await alfUiDeleteSecret(POMO_AUTO_KEY);
       // Persist exactly one verified, automatically pinned mapping. No
       // imported SP tasks, Notion pages, fields, or automatic flags are touched.
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
@@ -573,6 +585,8 @@ code {font:inherit;white-space:nowrap}
       ui('graphSyncSection').hidden=false;
       ui('authorizeGraphApply').checked=false;
       ui('authorizeGraphExport').checked=false;ui('graphPlan').textContent='';
+      ui('authorizePomoLog').checked=false;
+      ui('authorizePomoAuto').checked=false;
       nextTaskPreviewCursor=null;ui('nextPreviewBtn').hidden=true;
       stagedTimeChanges=null;stagedPlanRefresh=null;stagedHabitDay=null;
       stagedHabitStatus=null;stagedObservedPomo=null;
@@ -611,6 +625,7 @@ code {font:inherit;white-space:nowrap}
     if(active)return;
     busy(true);
     graphSyncPreview=null;ui('authorizeGraphApply').checked=false;
+    ui('authorizePomoLog').checked=false;
     graphReviewTruncated=false;
     ui('graphPlan').textContent='';
     ui('graphSyncSection').hidden=false;
@@ -623,12 +638,17 @@ code {font:inherit;white-space:nowrap}
       graphReviewTruncated=ts.reviewTruncated===true;
       ui('graphReport').textContent='المشاريع الصغيرة الناقصة: '+ts.projects+
         '، المهام/الحزم الناقصة: '+ts.tasks+
+        '، سجلات العمل المفحوصة: '+ts.scannedTasks+
         '، مشروعات SP الجديدة: '+ts.exportProjects+
         '، مهام SP الجديدة: '+ts.exportTasks+
         '، مهام مرتبطة لها جلسات بومودورو مرصودة: '+ts.linkedObservedPomodoroTasks+
         '، عناصر متجاوزة: '+ts.skipped.tasks+
         '، تعارضات: '+ts.skipped.conflicts+
         '. المعاينة قراءة فقط، ولا يتم نقل سجلات المعرفة أو العادات.'+
+        (ts.skipped.reasons?' أسباب استبعاد المهام: '+
+          Object.entries(ts.skipped.reasons).filter(function(entry){
+            return entry[1]>0;
+          }).map(function(entry){return entry[0]+'='+entry[1];}).join('، ')+'.':'')+
         (graphReviewTruncated?' يوجد أكثر من 40 عنصرًا في أحد الاتجاهات؛ لا يمكن تفعيل المزامنة التلقائية قبل معالجة الدفعات الكبيرة.':'');
       var select=ui('graphUpperParent');
       select.replaceChildren();
@@ -692,6 +712,50 @@ code {font:inherit;white-space:nowrap}
     }catch(e){fail(e);}
     finally{ui('authorizeGraphExport').checked=false;busy(false);}
   }
+  async function exportReviewedPomodoros(){
+    if(active)return;
+    busy(true);
+    try {
+      if(!graphSyncPreview||!ui('authorizePomoLog').checked)
+        throw new Error('A fresh reviewed graph and separate Pomodoro page-content consent are required');
+      var reviewed=graphSyncPreview;graphSyncPreview=null;
+      var result=await alfHostRpc('graphApply',{
+        fingerprint:reviewed,mode:'pomodoro'});
+      ui('pomoLogStatus').textContent='جلسات مفحوصة: '+result.scanned+
+        '، مرتبطة: '+result.linked+'، محفوظة في صفحات Notion: '+result.written+
+        '، موجودة مسبقًا: '+result.alreadyPresent+
+        '، متوقفة للمراجعة: '+result.pending+'، أخطاء: '+result.errors+
+        '. أعد معاينة المهام قبل أي دفعة أخرى.';
+      message('Only explicitly reviewed, linked observed Pomodoros may have been appended.');
+    }catch(e){fail(e);}
+    finally{ui('authorizePomoLog').checked=false;busy(false);}
+  }
+  async function enableAutomaticPomodoroJournal(){
+    if(active)return;
+    busy(true);
+    try{
+      if(!graphSyncPreview||!ui('authorizePomoAuto').checked)
+        throw new Error('Review linked tasks and separately approve recurring Pomodoro journal writes');
+      if(await alfUiGetSecret(GRAPH_AUTO_KEY)!=='enabled')
+        throw new Error('Enable the single-device graph engine first');
+      if(!await alfUiGetSecret(TOKEN_KEY))
+        throw new Error('Notion token required on this device');
+      await alfUiSetSecret(POMO_AUTO_KEY,'enabled');
+      ui('pomoLogStatus').textContent='إرسال البومودورو المرصود مفعّل فقط على هذا الجهاز وبحد أقصى ثلاث جلسات في كل دورة. يجب أن تظل Super Productivity تعمل.';
+      message('Device-local observed Pomodoro page journal enabled.');
+    }catch(e){fail(e);}
+    finally{ui('authorizePomoAuto').checked=false;busy(false);}
+  }
+  async function disableAutomaticPomodoroJournal(){
+    if(active)return;
+    busy(true);
+    try{
+      await alfUiDeleteSecret(POMO_AUTO_KEY);
+      ui('pomoLogStatus').textContent='إرسال البومودورو التلقائي مغلق على هذا الجهاز.';
+      message('Automatic Pomodoro journal disabled.');
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
   async function enableProjectTaskGraphAuto(){
     if(active)return;
     busy(true);
@@ -718,6 +782,7 @@ code {font:inherit;white-space:nowrap}
     try{
       await alfUiDeleteSecret(GRAPH_AUTO_KEY);
       await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
+      await alfUiDeleteSecret(POMO_AUTO_KEY);
       ui('graphAutoStatus').textContent='المزامنة التلقائية للمشروعات والمهام الجديدة مغلقة على هذا الجهاز.';
       message('Device-local graph automation disabled.');
     }catch(e){fail(e);}
@@ -747,6 +812,7 @@ code {font:inherit;white-space:nowrap}
     try {
       await alfUiDeleteSecret(GRAPH_AUTO_KEY);
       await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
+      await alfUiDeleteSecret(POMO_AUTO_KEY);
       await alfUiDeleteSecret(TOKEN_KEY);
       ui('token').value = '';
       message('Local Notion token forgotten on this device. Synced mapping configuration was preserved.');
@@ -3032,6 +3098,9 @@ code {font:inherit;white-space:nowrap}
     ui('graphPreviewBtn').addEventListener('click',previewProjectTaskGraph);
     ui('graphApplyBtn').addEventListener('click',applyProjectTaskGraph);
     ui('graphExportBtn').addEventListener('click',exportProjectTaskGraph);
+    ui('graphPomoExportBtn').addEventListener('click',exportReviewedPomodoros);
+    ui('pomoAutoEnableBtn').addEventListener('click',enableAutomaticPomodoroJournal);
+    ui('pomoAutoDisableBtn').addEventListener('click',disableAutomaticPomodoroJournal);
     ui('graphAutoEnableBtn').addEventListener('click',enableProjectTaskGraphAuto);
     ui('graphAutoDisableBtn').addEventListener('click',disableProjectTaskGraphAuto);
     ui('save').addEventListener('click',save);
