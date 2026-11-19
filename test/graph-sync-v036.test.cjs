@@ -109,6 +109,12 @@ test('verified lower project and bundle graph creates native persistent SP entit
   assert.deepEqual(f.events.filter(x=>x[0]==='addTask'),[
     ['addTask','Bundle A',null],['addTask','Child A','sp-task-1']
   ]);
+  for(const id of [bundle,child]){
+    const anchor=JSON.parse(f.saved.get('alf-graph-status-v1-'+id));
+    assert.equal(anchor.notionId,id);
+    assert.equal(anchor.spDone,false);
+    assert.equal(anchor.notionStatus,'Not started');
+  }
   assert.equal(f.tasks[0].notes,'alf-notion-page-id:55555555-5555-5555-5555-555555555555');
   assert.equal(f.tasks[1].notes,'alf-notion-page-id:66666666-6666-6666-6666-666666666666');
   assert.equal(f.events.some(x=>x[0]==='notion'),false);
@@ -310,6 +316,125 @@ test('a native SP Inbox task exports to existing Notion board with no project re
   const post=f.events.find(e=>e[0]==='notion'&&e[2]==='POST');
   assert.equal(post[3].parent.data_source_id,board);
   assert.equal(post[3].properties['العنصر الفرعي'],undefined);
+});
+test('diagnostic export targets one reviewed SP task and leaves unrelated SP tasks alone',async()=>{
+  const x=sample();
+  x.projects=[];x.tasks=[];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.spActive=[
+    {id:'only-me',title:'HGS',projectId:'INBOX_PROJECT',notes:'',
+      timeSpent:0,timeEstimate:0,isDone:false,subTaskIds:[]},
+    {id:'unrelated',title:'Unrelated old task',projectId:'INBOX_PROJECT',
+      notes:'',timeSpent:0,timeEstimate:0,isDone:false,subTaskIds:[]}
+  ];
+  const f=fixture(x);
+  const plan=await run('alfGraphPlan',f.api,x);
+  const sent=await run('alfGraphApplyRemote',f.api,x,plan,'',
+    {taskId:'only-me',maxWrites:1});
+  assert.equal(sent.tasks,1);
+  const posts=f.events.filter(e=>e[0]==='notion'&&e[2]==='POST');
+  assert.equal(posts.length,1);
+  assert.equal(posts[0][3].properties['المصدر'].title[0].text.content,'HGS');
+  assert.equal(f.tasks[1].notes,'');
+});
+test('SP v20 absent optional task fields do not falsely block exact unchanged task export',async()=>{
+  const x=sample();
+  x.projects=[];x.tasks=[];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.spActive=[{id:'new-sp-task',title:'HGS',projectId:'INBOX_PROJECT',
+    timeSpent:0,timeEstimate:0,subTaskIds:[]}];
+  const f=fixture(x);
+  const p=await run('alfGraphPlan',f.api,x);
+  assert.equal(p.exportsTasks.length,1);
+  const result=await run('alfGraphApplyRemote',f.api,x,p,'',
+    {taskId:'new-sp-task',maxWrites:1});
+  assert.equal(result.tasks,1);
+  assert.equal(result.skipped,0);
+  assert.equal(f.events.filter(e=>e[0]==='notion'&&e[2]==='POST').length,1);
+  const record=JSON.parse(f.saved.get('alf-graph-task-export-v1-new-sp-task'));
+  assert.equal(record.status,'committed');
+  const anchor=JSON.parse(f.saved.get('alf-graph-status-v1-'+record.notionId));
+  assert.equal(anchor.notionStatus,'Not started');
+  assert.equal(anchor.spDone,false);
+});
+test('enabled automatic engine exports the newest eligible SP Inbox task without a manual button',async()=>{
+  const x=sample();
+  x.projects=[];x.tasks=[];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.spActive=[
+    {id:'older',title:'Old unrelated',created:1,projectId:'INBOX_PROJECT',
+      notes:'',timeSpent:0,timeEstimate:0,isDone:false,subTaskIds:[]},
+    {id:'newer',title:'HGS',created:200,projectId:'INBOX_PROJECT',
+      notes:'',timeSpent:0,timeEstimate:0,isDone:false,subTaskIds:[]}
+  ];
+  const f=fixture(x);
+  const secrets=new Map([['alf-auto-graph-local-enabled-v1','enabled'],
+    ['alf-auto-graph-cutover-v1',JSON.stringify({version:1,sinceMs:100})]]);
+  f.api.getSecret=async key=>secrets.get(key)||null;
+  f.api.setSecret=async(k,v)=>{secrets.set(k,v);};
+  const engine=run('alfCreateAutoGraphSync',f.api,{inventory:async()=>x});
+  const res=await engine.runOnce();
+  assert.equal(res.enabled,true);
+  assert.equal(res.written,1);
+  assert.equal(f.events.filter(e=>e[0]==='notion'&&e[2]==='POST').length,1);
+  const sent=f.events.find(e=>e[0]==='notion'&&e[2]==='POST');
+  assert.equal(sent[3].properties['المصدر'].title[0].text.content,'HGS');
+  const next=await engine.runOnce();
+  assert.equal(next.written,0);
+  assert.equal(f.events.filter(e=>e[0]==='notion'&&e[2]==='POST').length,1);
+});
+test('automatic graph activation never imports years of pre-existing records',async()=>{
+  const x=sample();
+  x.projects=[];x.tasks=[];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.spActive=[
+    {id:'old-task',title:'Existing task from before activation',
+      created:100,projectId:'INBOX_PROJECT',notes:'',
+      timeSpent:0,timeEstimate:0,isDone:false,subTaskIds:[]},
+    {id:'new-task',title:'New task after activation',
+      created:300,projectId:'INBOX_PROJECT',notes:'',
+      timeSpent:0,timeEstimate:0,isDone:false,subTaskIds:[]}
+  ];
+  const f=fixture(x);
+  const secrets=new Map([['alf-auto-graph-local-enabled-v1','enabled'],
+    ['alf-auto-graph-cutover-v1',JSON.stringify({version:1,sinceMs:200})]]);
+  f.api.getSecret=async k=>secrets.get(k)||null;
+  f.api.setSecret=async(k,v)=>{secrets.set(k,v);};
+  const res=await run('alfCreateAutoGraphSync',f.api,
+    {inventory:async()=>x}).runOnce();
+  assert.equal(res.written,1);
+  const posts=f.events.filter(e=>e[0]==='notion'&&e[2]==='POST');
+  assert.equal(posts.length,1);
+  assert.equal(posts[0][3].properties['المصدر'].title[0].text.content,
+    'New task after activation');
+});
+test('new Notion task may bring only its older required small project, never all old projects',async()=>{
+  const x=sample();
+  x.projects=[
+    {...x.projects[0],createdAt:100},
+    {id:uid('a'),name:'Old unrelated project',parent:upper,createdAt:100}
+  ];
+  x.tasks=[
+    {...x.tasks[0],createdAt:300},
+    {...x.tasks[1],createdAt:100}
+  ];
+  const f=fixture(x);
+  const p=await run('alfGraphPlan',f.api,x);
+  const filtered=run('alfGraphOnlyNewEntities',p,200);
+  assert.equal(filtered.projects.length,1);
+  assert.equal(filtered.projects[0].id,small);
+  assert.equal(filtered.tasks.length,1);
+  assert.equal(filtered.tasks[0].id,bundle);
+});
+test('automatic graph refuses enabled-but-unbaselined state with no data mutation',async()=>{
+  const x=sample();const f=fixture(x);
+  f.api.getSecret=async k=>k==='alf-auto-graph-local-enabled-v1'?'enabled':null;
+  f.api.setSecret=async()=>{};
+  const res=await run('alfCreateAutoGraphSync',f.api,
+    {inventory:async()=>x}).runOnce();
+  assert.equal(res.enabled,true);
+  assert.equal(res.errors,1);
+  assert.equal(f.events.length,0);
 });
 test('independent same-title SP and Notion tasks in one project are conflicts, not duplicates',async()=>{
   const x=sample();

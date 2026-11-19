@@ -11,7 +11,9 @@ test('SP onReady registers four opt-in background engines and unload clears all 
   const timers=new Map(),hooks=new Map(),notionRequests=[],localWrites=[],syncWrites=[];
   const secrets=new Map(); // all opt-in flags absent by default
   const api={
-    Hooks:{ACTION:'action',CURRENT_TASK_CHANGE:'currentTaskChange'},
+    Hooks:{ACTION:'action',CURRENT_TASK_CHANGE:'currentTaskChange',
+      TASK_CREATED:'taskCreated',TASK_COMPLETE:'taskComplete',
+      TASK_UPDATE:'taskUpdate',PROJECT_LIST_UPDATE:'projectListUpdate'},
     registerHeaderButton(){},
     showIndexHtmlAsView(){},
     registerHook(type,fn){hooks.set(type,fn);},
@@ -33,12 +35,13 @@ test('SP onReady registers four opt-in background engines and unload clears all 
   vm.runInContext(code,context,{filename:'plugin.js'});
   assert.equal(typeof ready,'function');
   assert.equal(typeof unload,'function');
-  assert.equal(hooks.size,2);
+  assert.equal(hooks.size,6);
   assert.equal(timers.size,0,'start only after SP signals readiness');
   await ready();
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(timers.size,4,'planning, work time, habit day and project/task graph each register timer');
-  assert.ok([...timers.values()].every(v=>v.ms===60000));
+  assert.deepEqual([...timers.values()].map(v=>v.ms).sort((a,b)=>a-b),
+    [15000,60000,60000,60000]);
   assert.equal(notionRequests.length,0,'disabled engines must not access Notion');
   assert.equal(localWrites.length,0,'disabled engines must not update local diagnostics');
   assert.equal(syncWrites.length,0,'disabled engines must not alter SuperSync metadata');
