@@ -11,6 +11,33 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const host = fs.readFileSync(path.join(root, 'plugin.js'), 'utf8');
 
+test('reconnecting the same Alf Notion sources preserves device writer authorization',()=>{
+  const match=html.match(/function alfQuickSameWorkBinding\(a,b\) \{[\s\S]*?\n  \}/);
+  assert.ok(match,'workspace identity comparison exists in the one-token UI');
+  const same=vm.runInNewContext('('+match[0]+')');
+  const uuid=x=>x.repeat(32);
+  const cfg={
+    version:2,taskSource:uuid('1'),habitSource:uuid('2'),
+    projectSource:uuid('3'),unit:'hours',typeValues:'مهمة, حزمة',
+    alfProfile:{name:'alf-life-os',upperSource:uuid('4'),
+      lowerSource:uuid('3')},
+    taskPropertyBindings:Object.fromEntries(
+      Array.from({length:8},(_,i)=>['f'+i,{
+        id:'id'+i,sourceId:uuid('1'),input:'field'+i}]))
+  };
+  assert.equal(same(cfg,structuredClone(cfg)),true,
+    'same saved profile must not revoke automatic syncing');
+  assert.equal(same(cfg,{...cfg,taskSource:uuid('5')}),false);
+  assert.equal(same(cfg,{...cfg,unit:'minutes'}),false);
+  assert.equal(same(cfg,{...cfg,taskPropertyBindings:{
+    ...cfg.taskPropertyBindings,f0:{...cfg.taskPropertyBindings.f0,id:'other'}
+  }}),false);
+  const body=html.slice(html.indexOf('async function alfQuickConnect()'),
+    html.indexOf('function dataSourceId(value'));
+  assert.match(body,/if\(credentialChanged\)\{\s*await alfQuickDisableDeviceWriters\(\)/);
+  assert.match(body,/if\(!alfQuickSameWorkBinding\(existingMapping,discovery\.config\)\)\s*await alfQuickDisableDeviceWriters\(\)/);
+});
+
 function mount(customRows, habitRows, taskPages, initialConfig) {
   const els = new Map();
   const requests = [];

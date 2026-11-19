@@ -41,7 +41,7 @@ test('SP onReady registers four opt-in background engines and unload clears all 
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(timers.size,4,'planning, work time, habit day and project/task graph each register timer');
   assert.deepEqual([...timers.values()].map(v=>v.ms).sort((a,b)=>a-b),
-    [15000,60000,60000,60000]);
+    [5000,60000,60000,60000]);
   assert.equal(notionRequests.length,0,'disabled engines must not access Notion');
   assert.equal(localWrites.length,0,'disabled engines must not update local diagnostics');
   assert.equal(syncWrites.length,0,'disabled engines must not alter SuperSync metadata');
