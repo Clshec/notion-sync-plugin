@@ -401,7 +401,7 @@ test('automatic graph activation never imports years of pre-existing records',as
   f.api.getSecret=async k=>secrets.get(k)||null;
   f.api.setSecret=async(k,v)=>{secrets.set(k,v);};
   const res=await run('alfCreateAutoGraphSync',f.api,
-    {inventory:async()=>x}).runOnce();
+    {inventory:async()=>x,notionCatchupMs:0}).runOnce();
   assert.equal(res.written,1);
   const posts=f.events.filter(e=>e[0]==='notion'&&e[2]==='POST');
   assert.equal(posts.length,1);
@@ -420,11 +420,144 @@ test('new Notion task may bring only its older required small project, never all
   ];
   const f=fixture(x);
   const p=await run('alfGraphPlan',f.api,x);
-  const filtered=run('alfGraphOnlyNewEntities',p,200);
+  const filtered=run('alfGraphOnlyNewEntities',p,200,{notionCatchupMs:0});
   assert.equal(filtered.projects.length,1);
   assert.equal(filtered.projects[0].id,small);
   assert.equal(filtered.tasks.length,1);
   assert.equal(filtered.tasks[0].id,bundle);
+});
+test('recent Notion task created just before enabling device sync is recovered without old backfill',async()=>{
+  const now=Date.now();
+  const plan={projects:[],tasks:[
+    {id:uid('8'),title:'Recent task',createdAt:now-3600000,project:null},
+    {id:uid('9'),title:'Ancient task',createdAt:now-10*86400000,project:null}
+  ],exportsProjects:[],exportsTasks:[]};
+  const p=run('alfGraphOnlyNewEntities',plan,now-1000);
+  assert.equal(p.tasks.length,1);
+  assert.equal(p.tasks[0].title,'Recent task');
+});
+test('Notion incremental timestamp probe only reads original sources with pinned work filter',async()=>{
+  const x=sample();const f=fixture(x);
+  f.api.getSecret=async k=>k==='alf-notion-token'?'ntn_FAKE_ONLY':null;
+  f.saved.set('alf-mapping-v2',JSON.stringify(mapping()));
+  f.api.request=async(uri,opts)=>{
+    f.events.push(['notion',uri,opts.method,opts.body]);
+    return {results:[{id:child,last_edited_time:'2026-11-19T13:10:00.000Z'}],
+      has_more:false};
+  };
+  const sig=await run('alfGraphQuickProbe',f.api,{now:1763558500000});
+  assert.equal(typeof sig,'string');
+  assert.equal(f.events.length,3);
+  const boardProbe=f.events.find(e=>e[1].endsWith('/'+board+'/query'));
+  assert.ok(boardProbe);
+  assert.equal(boardProbe[3].filter.and[0].timestamp,'last_edited_time');
+  assert.equal(boardProbe[3].filter.and[1].or[0].property,'نوع الصفحة');
+  assert.equal(boardProbe[3].page_size,25);
+});
+function trackedTimeFixture({notionActual=0,spMs=90000}={}){
+  const x=sample();
+  x.tasks=[run('alfGraphItem',row(child,'Child A',['مهمة'],small),
+    mapping())];
+  const dashed=child.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,
+    '$1-$2-$3-$4-$5');
+  x.spActive=[{id:'sp-linked-time',title:'Child A',
+    projectId:'INBOX_PROJECT',notes:'alf-notion-page-id:'+dashed,
+    isDone:false,subTaskIds:[],timeSpent:spMs}];
+  const f=fixture(x),page=row(child,'Child A',['مهمة'],small);
+  page.properties['الوقت الفعلي'].number=notionActual;
+  f.api.getSecret=async k=>k==='alf-auto-graph-local-enabled-v1'?
+    'enabled':null;
+  let patches=0;
+  f.api.request=async(uri,opts)=>{
+    f.events.push(['notion',uri,opts.method,opts.body]);
+    if(uri.endsWith('/pages/'+child) && opts.method==='GET')return page;
+    if(uri.endsWith('/pages/'+child) && opts.method==='PATCH'){
+      patches++;
+      page.properties['الوقت الفعلي'].number=
+        opts.body.properties['actualProp-id'].number;
+      return {...page};
+    }
+    throw new Error('Unexpected tracked-time endpoint');
+  };
+  const plan={links:{tasks:new Map([[child,'sp-linked-time']])}};
+  return {f,x,page,plan,get patches(){return patches;}};
+}
+test('automatic time sync writes real SP seconds into original Notion actual hours, idempotently',async()=>{
+  const x=trackedTimeFixture({spMs:90000});
+  const first=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  assert.equal(first.anchored,1);
+  assert.equal(first.written,1);
+  assert.equal(x.page.properties['الوقت الفعلي'].number,0.025);
+  assert.equal(x.patches,1);
+  const repeated=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  assert.equal(repeated.written,0);
+  assert.equal(repeated.unchanged,1);
+  assert.equal(x.patches,1);
+  x.x.spActive[0].timeSpent=180000;
+  x.f.tasks[0].timeSpent=180000;
+  const next=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  assert.equal(next.written,1);
+  assert.equal(x.page.properties['الوقت الفعلي'].number,0.05);
+  assert.equal(x.patches,2);
+});
+test('historical Notion actual time is preserved and new SP time is added as a delta',async()=>{
+  const x=trackedTimeFixture({notionActual:2,spMs:1800000});
+  const first=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  assert.equal(first.anchored,1);
+  assert.equal(first.written,0);
+  assert.equal(x.page.properties['الوقت الفعلي'].number,2);
+  x.x.spActive[0].timeSpent+=300000;
+  x.f.tasks[0].timeSpent+=300000;
+  const next=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  assert.equal(next.written,1);
+  assert.equal(x.page.properties['الوقت الفعلي'].number,2.083333);
+});
+test('manual Notion correction beats timer increments; no overwriting',async()=>{
+  const x=trackedTimeFixture({spMs:90000});
+  await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  x.page.properties['الوقت الفعلي'].number=8;
+  x.x.spActive[0].timeSpent=180000;
+  x.f.tasks[0].timeSpent=180000;
+  const result=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  assert.equal(result.conflicts,1);
+  assert.equal(result.written,0);
+  assert.equal(x.page.properties['الوقت الفعلي'].number,8);
+  assert.equal(x.patches,1);
+});
+test('unknown Notion tracked-time PATCH outcome never causes a blind second time update',async()=>{
+  const x=trackedTimeFixture({spMs:90000});
+  const request=x.f.api.request;
+  x.f.api.request=async(uri,opts)=>{
+    const reply=await request(uri,opts);
+    if(opts.method==='PATCH')throw new Error('Notion replied after connection dropped');
+    return reply;
+  };
+  const first=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  assert.equal(first.errors,1);
+  assert.equal(x.patches,1);
+  assert.equal(x.page.properties['الوقت الفعلي'].number,0.025);
+  const again=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan,
+    {minPushGapMs:0});
+  assert.equal(again.conflicts,1);
+  assert.equal(again.written,0);
+  assert.equal(x.patches,1,'a lost response cannot double-count work time');
+});
+test('older scoped time writer takes precedence over graph automatic time',async()=>{
+  const x=trackedTimeFixture({spMs:90000});
+  x.f.api.getSecret=async k=>k==='alf-auto-time-local-enabled-v1'?
+    'enabled':k==='alf-auto-graph-local-enabled-v1'?'enabled':null;
+  const result=await run('alfGraphSyncTrackedTime',x.f.api,x.x,x.plan);
+  assert.equal(result.legacyOwner,true);
+  assert.equal(result.written,0);
+  assert.equal(x.patches,0);
 });
 test('automatic graph refuses enabled-but-unbaselined state with no data mutation',async()=>{
   const x=sample();const f=fixture(x);

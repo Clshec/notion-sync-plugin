@@ -437,6 +437,13 @@ function alfCreateHostRpcHandler(api, doc) {
         graphReview={fingerprint:plan.fingerprint,issuedAt:Date.now(),
           inventory,plan};
         value=alfGraphPublicReview(plan);
+      } else if (req.op === 'graphFastProbe') {
+        if(Object.keys(args).length)
+          throw new Error('Unexpected fast graph probe arguments');
+        const began=Date.now();
+        const signature=await alfGraphQuickProbe(api);
+        value={ok:true,elapsedMs:Date.now()-began,
+          incomplete:signature===null};
       } else if (req.op === 'graphApply') {
         if(!['import','export','pomodoro'].includes(args.mode) ||
             !Object.keys(args).every(k=>['fingerprint','mode','upperParentId','spTaskId'].includes(k)) ||
@@ -746,7 +753,7 @@ async function alfStoreAutoStatus(api,flow,stats) {
   // Local-only diagnostic aggregates. Never expose page/task IDs, titles,
   // Notion tokens, request details or full synced data in these records.
   const numeric={};
-  for(const key of ['processed','updated','written','anchored','skipped',
+  for(const key of ['processed','updated','written','timeWritten','anchored','skipped',
     'unchanged','conflicts','errors']) {
     if(Number.isSafeInteger(stats&&stats[key])&&stats[key]>=0)
       numeric[key]=stats[key];
@@ -1648,6 +1655,44 @@ async function alfGraphRequest(api,token,path,method='GET',body) {
   if(body!==undefined)opts.body=body;
   return await alfQueuedNotionRequest(api,'https://api.notion.com/v1'+path,opts);
 }
+// Lightweight incremental change detection for Notion. It does NOT replace
+// the full authoritative graph scan on a change. The full scan is kept so
+// identity resolution, parent relations and duplicate checks remain sound.
+// An externally configured verified Notion webhook can later wake the same
+// reconciliation loop; this short poll is a local fallback, not a webhook.
+async function alfGraphQuickProbe(api,options={}){
+  if(typeof api.getSecret!=='function'||typeof api.loadSyncedData!=='function')
+    throw new Error('Missing scoped graph probe APIs');
+  const token=await api.getSecret('alf-notion-token');
+  if(!token)throw new Error('Notion token missing for graph probe');
+  const mapping=alfGraphSourceConfig(await api.loadSyncedData('alf-mapping-v2'));
+  const now=Number.isFinite(options.now)?options.now:Date.now();
+  const since=new Date(now-10*60*1000).toISOString();
+  const edited={timestamp:'last_edited_time',
+    last_edited_time:{on_or_after:since}};
+  const result=[];
+  for(const [type,source] of Object.entries(mapping.ids)){
+    const filter=type==='board'?{and:[edited,{or:[
+      {property:mapping.c.typeProp,multi_select:{contains:'مهمة'}},
+      {property:mapping.c.typeProp,multi_select:{contains:'حزمة'}}
+    ]}]}:edited;
+    const rows=await alfGraphRequest(api,token,'/data_sources/'+source+'/query',
+      'POST',{filter,page_size:25,
+        sorts:[{timestamp:'last_edited_time',direction:'descending'}]});
+    if(!rows||!Array.isArray(rows.results)||rows.results.length>25||
+       typeof rows.has_more!=='boolean')
+      throw new Error('Incomplete graph change probe response');
+    if(rows.has_more)return null; // Force an authoritative scan.
+    for(const p of rows.results){
+      const id=alfGraphId(p&&p.id);
+      if(!id||typeof p.last_edited_time!=='string')
+        throw new Error('Unverifiable graph update timestamp');
+      result.push([type,id,p.last_edited_time]);
+    }
+  }
+  return JSON.stringify(result.sort((a,b)=>a[0].localeCompare(b[0])||
+    a[1].localeCompare(b[1])));
+}
 async function alfGraphAll(api,token,source,filter,maxRows=ALF_GRAPH_MAX_ROWS) {
   const result=[],seen=new Set();let cursor=null;
   for(let n=0;n<Math.ceil(maxRows/100);n++){
@@ -2054,6 +2099,7 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
 const ALF_GRAPH_PROJECT_INTENT_PREFIX='alf-graph-project-export-v1-';
 const ALF_GRAPH_TASK_INTENT_PREFIX='alf-graph-task-export-v1-';
 const ALF_GRAPH_STATUS_ANCHOR_PREFIX='alf-graph-status-v1-';
+const ALF_GRAPH_TIME_ANCHOR_PREFIX='alf-graph-time-v1-';
 const ALF_GRAPH_AUTO_KEY='alf-auto-graph-local-enabled-v1';
 const ALF_GRAPH_CUTOVER_KEY='alf-auto-graph-cutover-v1';
 const ALF_GRAPH_AUTO_PARENT_KEY='alf-auto-graph-parent-v1';
@@ -2280,6 +2326,125 @@ async function alfGraphSyncStatuses(api,inventory,plan){
   }
   return stats;
 }
+// User work time is a cumulative SP timeSpent value, NOT a Pomodoro count.
+// Mirror verified INCREMENTS to the original اللوح / الوقت الفعلي Number.
+// Keep a three-way baseline: a manually edited Notion number always wins.
+// No new Notion properties, and no write on unlinked tasks or habit pages.
+async function alfGraphSyncTrackedTime(api,inventory,plan,options={}){
+  const stats={anchored:0,written:0,unchanged:0,conflicts:0,
+    skipped:0,errors:0,legacyOwner:false};
+  if(typeof api.getSecret==='function' &&
+      await api.getSecret(ALF_AUTO_TIME_FLAG)==='enabled'){
+    stats.legacyOwner=true;
+    return stats; // The older opt-in exporter already owns this Number.
+  }
+  if(typeof api.persistDataSynced!=='function'||
+     typeof api.loadSyncedData!=='function')
+    return {...stats,errors:1};
+  if(!inventory.c || !['hours','minutes'].includes(inventory.c.unit) ||
+     !inventory.c.taskPropertyBindings?.actualProp?.id)
+    return {...stats,errors:1};
+  const all=[...inventory.spActive,...inventory.spArchive];
+  const max=Number.isInteger(options.max)&&options.max>0?
+    Math.min(options.max,20):8;
+  let checked=0;
+  for(const [notionId,spId] of plan.links.tasks){
+    if(checked++>=max)break;
+    const item=inventory.tasks.find(t=>t.id===notionId);
+    const spMatches=all.filter(t=>t&&t.id===spId&&
+      alfGraphTaskClaim(t,notionId));
+    if(!item||spMatches.length!==1 ||
+       (Array.isArray(spMatches[0].subTaskIds)&&spMatches[0].subTaskIds.length) ||
+       spMatches[0].repeatCfgId ||
+       !Number.isSafeInteger(spMatches[0].timeSpent) ||
+       spMatches[0].timeSpent<0){
+      stats.skipped++;continue;
+    }
+    const sp=spMatches[0],key=ALF_GRAPH_TIME_ANCHOR_PREFIX+notionId;
+    try{
+      const raw=await api.loadSyncedData(key);
+      let anchor=raw?JSON.parse(raw):null;
+      if(anchor&&(anchor.version!==1||anchor.notionId!==notionId||
+          anchor.spId!==spId||anchor.sourceId!==inventory.ids.board||
+          !Number.isSafeInteger(anchor.spMs)||anchor.spMs<0||
+          typeof anchor.notionNumber!=='number'||
+          !Number.isFinite(anchor.notionNumber)||anchor.notionNumber<0||
+          !Number.isSafeInteger(anchor.lastPushedAt))){
+        stats.conflicts++;continue;
+      }
+      if(anchor&&sp.timeSpent<anchor.spMs){
+        stats.conflicts++;continue; // user reset or changed the timer
+      }
+      if(anchor&&sp.timeSpent===anchor.spMs){
+        stats.unchanged++;continue;
+      }
+      if(anchor&&Date.now()-anchor.lastPushedAt<
+          (options.minPushGapMs??20000)&&!sp.isDone){
+        stats.unchanged++;continue; // don't PATCH on every timer tick
+      }
+      const path='/pages/'+notionId;
+      const page=await alfGraphRequest(api,inventory.token,path);
+      if(!page||page.object!=='page'||page.in_trash||
+         alfGraphId(page.id)!==notionId||
+         alfGraphId(page.parent&&page.parent.data_source_id)!==
+           inventory.ids.board){
+        stats.conflicts++;continue;
+      }
+      const live=alfGraphItem(page,inventory.c);
+      const actual=alfGraphField(page,inventory.c,'actualProp');
+      if(!live||live.title!==item.title||!actual||
+         actual.type!=='number'||
+         (actual.number!==null&&
+           (typeof actual.number!=='number'||
+            !Number.isFinite(actual.number)||actual.number<0))){
+        stats.conflicts++;continue;
+      }
+      const value=actual.number??0;
+      if(!anchor){
+        // A genuinely empty original Number may safely take the whole
+        // already-tracked SP duration. A nonempty Number is preserved as
+        // pre-existing history; only FUTURE SP increments are added.
+        const seed={version:1,notionId,spId,sourceId:inventory.ids.board,
+          spMs:value===0?0:sp.timeSpent,notionNumber:value,
+          lastPushedAt:Date.now()-21000};
+        await api.persistDataSynced(JSON.stringify(seed),key);
+        anchor=seed;stats.anchored++;
+      }
+      if(Math.abs(value-anchor.notionNumber)>0.000001){
+        stats.conflicts++;continue; // manual Notion edits are authoritative
+      }
+      const delta=sp.timeSpent-anchor.spMs;
+      if(delta<=0){stats.unchanged++;continue;}
+      const increment=delta/(inventory.c.unit==='hours'?3600000:60000);
+      const next=Math.round((anchor.notionNumber+increment)*1000000)/1000000;
+      if(!Number.isFinite(next)||next<=anchor.notionNumber){
+        stats.unchanged++;continue;
+      }
+      const newest=[...(await api.getTasks()||[]),
+        ...(await api.getArchivedTasks()||[])].filter(t=>t&&t.id===spId&&
+        alfGraphTaskClaim(t,notionId));
+      if(newest.length!==1||newest[0].timeSpent!==sp.timeSpent ||
+         (await api.loadSyncedData(key))!==JSON.stringify(anchor) ||
+         await api.getSecret(ALF_GRAPH_AUTO_KEY)!=='enabled'){
+        stats.conflicts++;continue;
+      }
+      // The last GET/PATCH race cannot be made atomic by Notion; on an
+      // ambiguous PATCH the unchanged baseline guarantees fail-closed.
+      const changed=await alfGraphRequest(api,inventory.token,path,'PATCH',{
+        properties:{
+          [inventory.c.taskPropertyBindings.actualProp.id]:{number:next}
+        }
+      });
+      if(!changed||changed.object!=='page'||
+         alfGraphId(changed.id)!==notionId)
+        throw new Error('Notion did not confirm tracked-time update');
+      stats.written++;
+      await api.persistDataSynced(JSON.stringify({...anchor,
+        spMs:sp.timeSpent,notionNumber:next,lastPushedAt:Date.now()}),key);
+    }catch(_){stats.errors++;}
+  }
+  return stats;
+}
 // v0.37: append-only Pomodoro journal in the body of the EXISTING Notion
 // task page. No new property/database and no overwriting user-authored blocks.
 // This is a log of OBSERVED completions, not imported historical timer data.
@@ -2441,13 +2606,29 @@ async function alfGraphApplyPomodoro(api,inventory,plan){
 // to receive status reconciliation regardless of their original creation date.
 // This is intentionally conservative: records without a trustworthy creation
 // timestamp require explicit historical reconciliation, not a guessed import.
-function alfGraphOnlyNewEntities(plan,sinceMs){
+function alfGraphOnlyNewEntities(plan,sinceMs,options={}){
   if(!Number.isSafeInteger(sinceMs)||sinceMs<=0||
      sinceMs>Date.now()+60000)
     throw new Error('Missing or invalid graph sync activation baseline');
   const fresh=items=>items.filter(x=>
     Number.isSafeInteger(x.createdAt)&&x.createdAt>=sinceMs);
-  const tasks=fresh(plan.tasks);
+  // Recover recent Notion work created just before device activation.
+  // Bound by time and the per-run write quota; no silent years-long
+  // historical migration. The SP-side historical backlog is still fenced.
+  const graceMs=options.notionCatchupMs===undefined?
+    48*3600000:options.notionCatchupMs;
+  if(!Number.isSafeInteger(graceMs)||graceMs<0||
+      graceMs>7*24*3600000)
+    throw new Error('Unbounded historical Notion catch-up refused');
+  const notionStart=Math.max(0,sinceMs-graceMs);
+  const tasks=plan.tasks.filter(t=>
+    Number.isSafeInteger(t.createdAt)&&t.createdAt>=notionStart);
+  const requiredBundles=new Set(tasks.map(t=>t.parent).filter(Boolean));
+  for(const t of plan.tasks){
+    if(requiredBundles.has(t.id)&&!tasks.some(x=>x.id===t.id))
+      tasks.push(t);
+  }
+  tasks.sort((a,b)=>Number(!!a.parent)-Number(!!b.parent));
   // A new Notion task can belong to an older legitimate small project that
   // SP has never seen. Create/adopt only that required parent project, not
   // the entire historical project backlog.
@@ -2473,12 +2654,14 @@ function alfGraphOnlyNewEntities(plan,sinceMs){
 // engines own approved plan/time/habit fields; do not double-write them here.
 // A single designated Windows/Android writer per account is required.
 function alfCreateAutoGraphSync(api,options={}){
-  const intervalMs=options.intervalMs||2*60*1000;
+  const intervalMs=options.intervalMs||8000;
   const inventoryFn=options.inventory||alfGraphInventory;
-  let timer=null,inflight=false,previous=0;
+  const probeFn=options.probe||alfGraphQuickProbe;
+  const fullRefreshMs=options.fullRefreshMs||2*60*1000;
+  let timer=null,inflight=false,previous=0,lastFull=0,probeSignature;
   async function runOnce(){
     const result={enabled:false,processed:0,written:0,skipped:0,
-      conflicts:0,errors:0};
+      conflicts:0,errors:0,timeWritten:0};
     if(typeof api.getSecret!=='function' ||
        await api.getSecret(ALF_GRAPH_AUTO_KEY)!=='enabled')return result;
     result.enabled=true;
@@ -2510,17 +2693,23 @@ function alfCreateAutoGraphSync(api,options={}){
         newPostLocalPlan,upper,{maxWrites:1,preferNewest:true});
       const statuses=await alfGraphSyncStatuses(api,postLocalInventory,
         postLocalPlan);
+      const time=await alfGraphSyncTrackedTime(api,postLocalInventory,
+        postLocalPlan);
       const pomo=await api.getSecret(ALF_POMO_AUTO_KEY)==='enabled'?
         await alfGraphApplyPomodoro(api,postLocalInventory,postLocalPlan):
         {written:0,pending:0,errors:0};
       result.processed=postLocalPlan.projects.length+postLocalPlan.tasks.length+
         postLocalPlan.exportsProjects.length+postLocalPlan.exportsTasks.length;
       result.written=local.projects+local.tasks+
-        remote.projects+remote.tasks+statuses.written+pomo.written;
+        remote.projects+remote.tasks+statuses.written+pomo.written+
+        time.written;
+      result.timeWritten=time.written;
       result.skipped=local.skipped+remote.skipped+remote.pending+
-        statuses.skipped+pomo.pending;
-      result.conflicts=postLocalPlan.skipped.conflicts+statuses.conflicts;
-      result.errors=local.errors+remote.errors+statuses.errors+pomo.errors;
+        statuses.skipped+pomo.pending+time.skipped;
+      result.conflicts=postLocalPlan.skipped.conflicts+statuses.conflicts+
+        time.conflicts;
+      result.errors=local.errors+remote.errors+statuses.errors+pomo.errors+
+        time.errors;
     }catch(_){result.errors++;}
     await alfStoreAutoStatus(api,'graph',result);
     return result;
@@ -2531,16 +2720,39 @@ function alfCreateAutoGraphSync(api,options={}){
     // cycle should start without a ten-minute delay.
     if(typeof api.getSecret!=='function' ||
        await api.getSecret(ALF_GRAPH_AUTO_KEY)!=='enabled'){
-      previous=0;return;
+      previous=0;lastFull=0;probeSignature=undefined;return;
     }
     if(!force&&Date.now()-previous<intervalMs)return;
+    // A long full scan must not be repeated continuously by every
+    // taskUpdate emitted while SP's timer is ticking.
+    if(force&&lastFull&&Date.now()-lastFull<15000)return;
     inflight=true;previous=Date.now();
-    try{return await runOnce();}
+    try{
+      if(!force&&lastFull&&Date.now()-lastFull<fullRefreshMs){
+        let changed;
+        try{
+          const next=await probeFn(api);
+          changed=next===null||probeSignature===undefined||
+            next!==probeSignature;
+          probeSignature=next;
+        }catch(_){
+          // If a quick probe cannot prove the state is unchanged, rely on
+          // the bounded full scan rather than dropping future updates.
+          changed=Date.now()-lastFull>=45000;
+        }
+        if(!changed)return;
+      }
+      const result=await runOnce();
+      if(result&&result.enabled){
+        lastFull=Date.now();
+      }
+      return result;
+    }
     finally{inflight=false;}
   }
   function start(){
     if(timer!==null||typeof setInterval!=='function')return;
-    timer=setInterval(()=>{void heartbeat();},15000);
+    timer=setInterval(()=>{void heartbeat();},5000);
     void heartbeat();
   }
   function stop(){

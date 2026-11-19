@@ -100,12 +100,13 @@ code {font:inherit;white-space:nowrap}
     <label><input type="checkbox" id="authorizeGraphExport"> أوافق على إنشاء الصفحات الجديدة المعروضة داخل قواعد Notion الأصلية. لن تعاد محاولة طلبات الإنشاء ذات النتائج غير المؤكدة تجنبًا للتكرار.</label>
     <button id="graphExportBtn">إرسال الدفعة الجديدة من SP إلى Notion (مراجعة صريحة)</button>
     <h3>المزامنة الدورية الاختيارية للكيانات الجديدة</h3>
-    <p class="muted">بعد أول تفعيل، ينقل المحرك المهام الجديدة تلقائيًا أثناء تشغيل SP: يستجيب لتغييرات SP ويبحث عن تغييرات Notion كل دقيقتين تقريبًا. العناصر القديمة تظل كما هي ولا تُرحّل دفعة واحدة. الجهاز الحالي هو الكاتب الوحيد؛ لا تفعّل نفس المحرك على أندرويد في الوقت نفسه.</p>
+    <p class="muted">يتفاعل المحرك مع إشعارات تغييرات SP ويكشف تغييرات Notion بفحص خفيف كل نحو 8 ثوانٍ، مع مسح شامل احتياطي كل دقيقتين. هذا وضع شبه لحظي أثناء تشغيل SP، وليس Webhook حقيقيًا من Notion. يربط وقت العمل الفعلي تلقائيًا بخانة «الوقت الفعلي»، ويستعيد المهام المفتوحة من آخر 48 ساعة بحذر؛ دون ترحيل الأرشيف القديم دفعة واحدة. الجهاز الحالي هو الكاتب الوحيد؛ لا تفعّل المحرك على أندرويد في الوقت نفسه.</p>
     <label><input type="checkbox" id="authorizeGraphAuto"> أفهم أن التفعيل يسمح بإنشاء مهام ومشروعات تلقائيًا في Notion وSP دون مراجعة كل دفعة، وأن أي طلب Notion غير مؤكد سيتوقف.</label>
     <div class="actions">
       <button id="graphAutoEnableBtn">تفعيل مزامنة الكيانات على هذا الجهاز</button>
       <button id="graphAutoDisableBtn">إيقاف مزامنة الكيانات</button>
       <button id="graphAutoCheckBtn">عرض آخر نتيجة للمزامنة (قراءة محلية)</button>
+      <button id="graphFastProbeBtn">اختبار اكتشاف تغييرات Notion السريع (قراءة فقط)</button>
     </div>
     <p id="graphAutoStatus" role="status" aria-live="polite" class="muted">مغلقة افتراضيًا.</p>
     <details>
@@ -510,7 +511,7 @@ code {font:inherit;white-space:nowrap}
   }
   function busy(value) {
     active = value;
-    ['connectAuto','quickPreviewTasks','quickPreviewHabits','createDailyCountersBtn','graphPreviewBtn','graphApplyBtn','graphExportBtn','graphAutoEnableBtn','graphAutoDisableBtn','graphAutoCheckBtn','graphPomoExportBtn','pomoAutoEnableBtn','pomoAutoDisableBtn','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
+    ['connectAuto','quickPreviewTasks','quickPreviewHabits','createDailyCountersBtn','graphPreviewBtn','graphApplyBtn','graphExportBtn','graphAutoEnableBtn','graphAutoDisableBtn','graphAutoCheckBtn','graphFastProbeBtn','graphPomoExportBtn','pomoAutoEnableBtn','pomoAutoDisableBtn','nextPreviewBtn','save','disconnect','schemaBtn','pinProps','previewBtn','importBtn','stagePlanBtn','commitPlanBtn','seedAutoPlanBtn','enableAutoPlanBtn','disableAutoPlanBtn','planTimeBtn','pushTimeBtn','seedAutoTimeBtn','enableAutoTimeBtn','disableAutoTimeBtn','previewObservedPomoBtn','pushObservedPomoBtn','pinHabitProps','previewHabits','saveHabitMappings','previewHabitDay','pushHabitDay','previewHabitStatusBtn','pushHabitStatusBtn','enableAutoHabitsBtn','disableAutoHabitsBtn','refreshAutoStatusBtn'].forEach(function (id) { ui(id).disabled = value; });
   }
   function getForm() {
     var c = {version:2};
@@ -558,24 +559,58 @@ code {font:inherit;white-space:nowrap}
       return 'تعذّر الوصول لقواعد البيانات. راجع اتصال التكامل بالقواعد الأصلية في Notion.';
     return 'تعذر إكمال الاتصال الآمن. راجع صلاحيات Notion ثم أعد المحاولة. '+hint.replace(/(?:ntn_|secret_)[A-Za-z0-9_-]+/ig,'[redacted]').slice(0,90);
   }
+  function alfQuickSameWorkBinding(a,b) {
+    if(!a||!b||a.version!==2||b.version!==2||
+       a.alfProfile?.name!=='alf-life-os'||
+       b.alfProfile?.name!=='alf-life-os')return false;
+    function sameId(x,y){
+      return typeof x==='string'&&typeof y==='string'&&
+        x.replace(/-/g,'').toLowerCase()===y.replace(/-/g,'').toLowerCase();
+    }
+    for(var key of ['taskSource','habitSource','projectSource']){
+      if(!sameId(a[key],b[key]))return false;
+    }
+    for(var key of ['upperSource','lowerSource']){
+      if(!sameId(a.alfProfile[key],b.alfProfile[key]))return false;
+    }
+    if(a.unit!==b.unit||a.typeValues!==b.typeValues)return false;
+    var keys=new Set([...Object.keys(a.taskPropertyBindings||{}),
+      ...Object.keys(b.taskPropertyBindings||{})]);
+    for(var key of keys){
+      var left=a.taskPropertyBindings?.[key],right=b.taskPropertyBindings?.[key];
+      if(!left||!right||left.id!==right.id||
+         !sameId(left.sourceId,right.sourceId)||left.input!==right.input)
+        return false;
+    }
+    return keys.size>=8;
+  }
+  async function alfQuickDisableDeviceWriters(){
+    for(var key of [AUTO_PLAN_ENABLED_KEY,AUTO_TIME_ENABLED_KEY,
+      AUTO_HABIT_ENABLED_KEY,AUTO_HABIT_DEVICE_SCOPE_KEY,
+      GRAPH_AUTO_KEY,GRAPH_CUTOVER_KEY,GRAPH_AUTO_PARENT_KEY,POMO_AUTO_KEY]){
+      await alfUiDeleteSecret(key);
+    }
+  }
   async function alfQuickConnect() {
     if(active)return;
     busy(true);
     ui('quickReport').textContent='جاري فحص القواعد المتاحة والتحقق من حقول النظام — دون كتابة في Notion…';
     try {
       var freshToken=ui('quickToken').value.trim();
+      var previousToken=await alfUiGetSecret(TOKEN_KEY);
+      var existingMappingRaw=await PluginAPI.loadSyncedData(CFG_KEY);
+      var existingMapping=null;
+      try{existingMapping=existingMappingRaw?JSON.parse(existingMappingRaw):null;}
+      catch(_){existingMapping=null;}
+      var credentialChanged=!!freshToken&&freshToken!==previousToken;
       if (freshToken) {
-        // Any existing per-device writer authorization is invalidated BEFORE
-        // switching credentials, even if discovery subsequently fails.
-        await alfUiDeleteSecret(AUTO_PLAN_ENABLED_KEY);
-        await alfUiDeleteSecret(AUTO_TIME_ENABLED_KEY);
-        await alfUiDeleteSecret(AUTO_HABIT_ENABLED_KEY);
-        await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
-        await alfUiDeleteSecret(GRAPH_AUTO_KEY);
-        await alfUiDeleteSecret(GRAPH_CUTOVER_KEY);
-        await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
-        await alfUiDeleteSecret(POMO_AUTO_KEY);
-        await alfUiSetSecret(TOKEN_KEY,freshToken);
+        // A genuinely different credential invalidates authorizations
+        // immediately, even when discovery subsequently fails. Re-entering
+        // the SAME token does not silently turn off an already running sync.
+        if(credentialChanged){
+          await alfQuickDisableDeviceWriters();
+          await alfUiSetSecret(TOKEN_KEY,freshToken);
+        }
         ui('quickToken').value='';
       } else if (!await alfUiGetSecret(TOKEN_KEY)) {
         throw new Error('Paste a Notion token first');
@@ -583,17 +618,11 @@ code {font:inherit;white-space:nowrap}
       var discovery=await alfHostRpc('discover',{});
       if(!discovery || !alfQuickReady(discovery.config))
         throw new Error('Alf discovery returned incomplete profile');
-      // Reconnection is a new connection grant, not consent to revive
-      // previously enabled writers. Disable all writer flags even if the
-      // existing local credential is reused with no new token entered.
-      await alfUiDeleteSecret(AUTO_PLAN_ENABLED_KEY);
-      await alfUiDeleteSecret(AUTO_TIME_ENABLED_KEY);
-      await alfUiDeleteSecret(AUTO_HABIT_ENABLED_KEY);
-      await alfUiDeleteSecret(AUTO_HABIT_DEVICE_SCOPE_KEY);
-      await alfUiDeleteSecret(GRAPH_AUTO_KEY);
-      await alfUiDeleteSecret(GRAPH_CUTOVER_KEY);
-      await alfUiDeleteSecret(GRAPH_AUTO_PARENT_KEY);
-      await alfUiDeleteSecret(POMO_AUTO_KEY);
+      // Verification of the same Notion connection is read-only. Revoking
+      // its existing writer on every press made tasks seem to stop syncing.
+      // Revoke only on a changed source/schema identity or token rotation.
+      if(!alfQuickSameWorkBinding(existingMapping,discovery.config))
+        await alfQuickDisableDeviceWriters();
       // Persist exactly one verified, automatically pinned mapping. No
       // imported SP tasks, Notion pages, fields, or automatic flags are touched.
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
@@ -846,9 +875,24 @@ code {font:inherit;white-space:nowrap}
       ui('graphAutoStatus').textContent='مفعّلة | آخر فحص: '+
         new Date(status.checkedAt).toLocaleString()+
         ' | سجلات تم إرسالها: '+(c.written||0)+
+        ' | تحديثات الوقت الفعلي: '+(c.timeWritten||0)+
         ' | تعارضات: '+(c.conflicts||0)+
         ' | أخطاء: '+(c.errors||0)+
         '. المزامنة تتم تلقائيًا دون هذا الزر.';
+    }catch(e){fail(e);}
+    finally{busy(false);}
+  }
+  async function testFastGraphProbe(){
+    if(active)return;
+    busy(true);
+    try{
+      var result=await alfHostRpc('graphFastProbe',{});
+      if(!result||result.ok!==true)
+        throw new Error('Fast Notion edit query unverified');
+      message('Notion incremental detection is supported. Probe completed in '+
+        result.elapsedMs+'ms'+
+        (result.incomplete?'; high change volume requires full inventory.':'.')+
+        ' No task or Notion data was modified.');
     }catch(e){fail(e);}
     finally{busy(false);}
   }
@@ -3171,6 +3215,7 @@ code {font:inherit;white-space:nowrap}
     ui('graphAutoEnableBtn').addEventListener('click',enableProjectTaskGraphAuto);
     ui('graphAutoDisableBtn').addEventListener('click',disableProjectTaskGraphAuto);
     ui('graphAutoCheckBtn').addEventListener('click',checkGraphAutoStatus);
+    ui('graphFastProbeBtn').addEventListener('click',testFastGraphProbe);
     ui('save').addEventListener('click',save);
     ui('disconnect').addEventListener('click',disconnect);
     ui('schemaBtn').addEventListener('click',inspect);
