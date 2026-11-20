@@ -1,5 +1,11 @@
 # Alf Notion Super Productivity
 
+### v0.40.1 — fresh-source race checks before native SP mutations (DRAFT)
+
+An authoritative full graph inventory may become stale *during* reconciliation. Before propagating a Notion-originated edit into native SP, the host now performs a **fresh read of the exact original Notion page** and verifies its data-source identity, task type, mapped parent/project relations, and all relevant planning fields, or for a project, its original upper-parent and folder/knowledge classification. If the Notion page has changed again since inventory collection, the operation stops as a conflict instead of overwriting a newer user edit. No new database, property, token field, server or Webhook is introduced; the ~8-second incremental change probe and native SP event hooks remain unchanged.
+
+Synthetic regression tests now include deliberately stale Notion reads before SP task-title, project-title and project relocation mutations, plus the existing 3-way conflict, zero-config activation, native creation and tracked-time tests. v0.40.1 is **not installed or live-accepted on the user's primary SP profile**; the last live-accepted Windows integration version is v0.39.1. Request simple end-user test scenarios from TEST_PLAN.md before approving this stacked PR. Self-hosted Woodpecker CI remains an independent gate.
+
 ### v0.40.0 — one-token user experience, project identity and bidirectional task metadata (DRAFT)
 
 **End-user setup is intentionally two actions:** (1) In Notion, grant your integration access to the four original Alf life-OS sources: «اللوح», «قاعدة العادات», «المستويات العليا» and «المستويات الفرعية». (2) Install the plugin, paste the integration token, and press **Connect**. The plugin verifies the source schemas and pinned property IDs and enables the device-local core automatic graph engine **as part of the successful connection**. No source ID entry, property mapping, per-task import button, project-parent dropdown or second automatic-enable checkbox is required. Advanced selectors/reviews move inside a collapsed developer section. Missing sources or invalid shapes fail closed with a permission/schema explanation instead of creating any Notion database or guessing names.

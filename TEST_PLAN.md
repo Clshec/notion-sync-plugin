@@ -1,4 +1,6 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.0 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.1 experimental)
+
+**v0.40.1 stale-read acceptance:** If a user edits the same Notion project or task twice while a local scan is in progress, the second live value must NEVER be overwritten in native SP by the stale first scan. All Notion → SP changes now re-fetch the exact original page before an SP write and verify current title, mapped task/parent relations and schema classifications. Unit tests cover a newer title and a project move superseding the first scan; real multi-device race tests are NOT complete. Do not authorize Android as a second independent writer.
 
 **v0.40.0 consumer one-token UX:** Open Notion integration Connections and share only the original four Alf sources (do not create database/columns). Install the new plugin, paste the access token ONCE, press Connect. Expect immediate verified source/field discovery, and the main status badge shows core automatic sync enabled. Do **not** need to click Graph Preview, choose upper parent, grant separate writer approval, enter a source UUID or open developer tools. A same-token Connect again keeps the exact original activation boundary; a different token or changed source schema revokes the previous authority.
 

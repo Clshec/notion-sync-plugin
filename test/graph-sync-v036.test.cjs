@@ -249,6 +249,18 @@ test('linked small-project rename in Notion updates native SP Project without du
   const initial=await run('alfGraphSyncProjectTitles',f.api,x,plan);
   assert.equal(initial.anchored,1);
   x.projects[0].name='Renamed in Notion';
+  f.api.request=async(uri,opts)=>{
+    f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET'&&uri.endsWith('/pages/'+small))
+      return {id:small,object:'page',parent:{data_source_id:small},
+        properties:{
+          Name:{type:'title',title:[{plain_text:'Renamed in Notion'}]},
+          'العنصر الأب':{type:'relation',relation:[{id:upper}]},
+          'المجلد الأب الفرعي':{type:'relation',relation:[]},
+          'النوع  ':{type:'multi_select',multi_select:[]}
+        }};
+    throw new Error('Unexpected project rename query');
+  };
   const updated=await run('alfGraphSyncProjectTitles',f.api,x,plan);
   assert.equal(updated.updatedSp,1);
   assert.equal(updated.writtenNotion,0);
@@ -299,6 +311,28 @@ test('concurrent divergent small-project renames refuse to overwrite either side
   assert.equal(result.updatedSp,0);
   assert.equal(f.events.some(e=>e[0]==='notion'),false);
 });
+test('Notion small project renamed again after initial inventory cannot overwrite the newer title in SP',async()=>{
+  const x=sample();
+  x.spProjects=[{id:'sp-project-1',title:'Verified small project'}];
+  const f=fixture(x);
+  f.saved.set('alf-graph-project-v1-'+small,JSON.stringify({
+    version:1,notionId:small,spId:'sp-project-1'}));
+  const plan=await run('alfGraphPlan',f.api,x);
+  await run('alfGraphSyncProjectTitles',f.api,x,plan);
+  x.projects[0].name='Intermediate Notion title';
+  f.api.request=async(uri,opts)=>{
+    f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET'&&uri.endsWith('/pages/'+small))
+      return {id:small,object:'page',parent:{data_source_id:small},
+        properties:{Name:{type:'title',title:[{
+          plain_text:'Even newer Notion title'}]}}};
+    throw new Error('Unexpected project stale-read request');
+  };
+  const result=await run('alfGraphSyncProjectTitles',f.api,x,plan);
+  assert.equal(result.conflicts,1);
+  assert.equal(result.updatedSp,0);
+  assert.equal(f.projects[0].title,'Verified small project');
+});
 function linkedPlanningFixture(){
   const x=sample();
   x.tasks=[run('alfGraphItem',row(child,'Child A',['مهمة'],small),
@@ -319,10 +353,16 @@ test('linked task title edit in Notion automatically updates native SP task',asy
     o.f.api,o.x,o.plan);
   assert.equal(initial.anchored,1);
   o.x.tasks[0].title='Updated in Notion';
+  o.f.api.request=async(uri,opts)=>{
+    o.f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET'&&uri.endsWith('/pages/'+child))
+      return row(child,'Updated in Notion',['مهمة'],small);
+    throw new Error('Unexpected Notion task planning query');
+  };
   const res=await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
   assert.equal(res.updatedSp,1);
   assert.equal(o.f.tasks[0].title,'Updated in Notion');
-  assert.equal(o.f.events.some(e=>e[0]==='notion'),false);
+  assert.equal(o.f.events.some(e=>e[0]==='notion'&&e[2]==='PATCH'),false);
 });
 test('linked SP title, estimate and due-day edits PATCH exact original pinned Notion fields',async()=>{
   const o=linkedPlanningFixture();
@@ -362,6 +402,21 @@ test('divergent simultaneous Notion and SP task title edits never overwrite each
   assert.equal(res.writtenNotion,0);
   assert.equal(o.f.events.some(e=>e[0]==='notion'),false);
 });
+test('Notion task changes after inventory but before native SP write are not overwritten',async()=>{
+  const o=linkedPlanningFixture();
+  await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
+  o.x.tasks[0].title='Intermediate Notion title';
+  o.f.api.request=async(uri,opts)=>{
+    o.f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET'&&uri.endsWith('/pages/'+child))
+      return row(child,'Newer user title',['مهمة'],small);
+    throw new Error('Unexpected Notion stale planning request');
+  };
+  const result=await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
+  assert.equal(result.conflicts,1);
+  assert.equal(result.updatedSp,0);
+  assert.equal(o.f.tasks[0].title,'Child A');
+});
 test('timed native due date cannot be silently rewritten by a date-only Notion field',async()=>{
   const o=linkedPlanningFixture();
   o.x.spActive[0].dueWithTime=1763550000000;
@@ -391,6 +446,12 @@ test('Notion moves a linked top-level task to Inbox using native SP project move
   const init=await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
   assert.equal(init.anchored,1);
   o.x.tasks[0].projects=[];
+  o.f.api.request=async(uri,opts)=>{
+    o.f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET'&&uri.endsWith('/pages/'+child))
+      return row(child,'Child A',['مهمة'],null);
+    throw new Error('Unexpected Notion task move query');
+  };
   const moved=await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
   assert.equal(moved.updatedSp,1);
   assert.equal(o.f.tasks[0].projectId,null);
@@ -421,6 +482,21 @@ test('a linked subtask cannot be moved by writing parentId via unsafe SP API',as
   assert.equal(res.skipped,1);
   assert.equal(res.updatedSp,0);
   assert.equal(res.writtenNotion,0);
+});
+test('Notion task project changed again after graph scan cannot trigger a stale SP move',async()=>{
+  const o=linkedTaskProjectFixture();
+  await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
+  o.x.tasks[0].projects=[];
+  o.f.api.request=async(uri,opts)=>{
+    o.f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET'&&uri.endsWith('/pages/'+child))
+      return row(child,'Child A',['مهمة'],small);
+    throw new Error('Unexpected stale Notion project query');
+  };
+  const res=await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
+  assert.equal(res.conflicts,1);
+  assert.equal(res.updatedSp,0);
+  assert.equal(o.f.tasks[0].projectId,'sp-linked-project');
 });
 test('linked SP task completion updates exactly its original Notion Status, not another field',async()=>{
   const x=sample();

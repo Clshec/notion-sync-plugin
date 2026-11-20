@@ -2329,6 +2329,26 @@ async function alfGraphSyncProjectTitles(api,inventory,plan,options={}){
       const spChanged=sp.title!==anchor.title;
       if(notionChanged===spChanged){stats.conflicts++;continue;}
       if(notionChanged){
+        // A full-graph snapshot is not authority to replace a user's live
+        // SP title: the Notion page might have changed or left the set of
+        // real small projects during our network round trip.
+        const page=await alfGraphRequest(api,inventory.token,
+          '/pages/'+notionId);
+        const parentIds=page?alfGraphRelation(page,'العنصر الأب'):[];
+        const folderIds=page?alfGraphRelation(page,'المجلد الأب الفرعي'):[];
+        const kinds=page?alfGraphKinds(page,'النوع  '):[];
+        if(!page||page.object!=='page'||page.in_trash||
+          alfGraphId(page.id)!==notionId||
+          alfGraphId(page.parent&&page.parent.data_source_id)!==
+            inventory.ids.lower||
+          alfGraphTitle(page,'Name')!==p.name||
+          parentIds.length!==(p.parent?1:0)||
+          (parentIds[0]||null)!==(p.parent||null)||
+          folderIds.length||
+          kinds.some(k=>['مجلد رئيسي','مجلد فرعي','كورس',
+            'دبلومة','فيديو','مصدر مقالات'].includes(k))){
+          stats.conflicts++;continue;
+        }
         const fresh=await api.getAllProjects();
         if(!Array.isArray(fresh)||fresh.filter(x=>x.id===spId&&
           x.title===anchor.title).length!==1){stats.conflicts++;continue;}
@@ -2430,12 +2450,29 @@ async function alfGraphSyncTaskPlanning(api,inventory,plan,options={}){
       }
       let values={...anchor.values,...bothEqual};
       if(Object.keys(toSp).length){
+        // Re-fetch the original page before touching SP. A second Notion
+        // edit made after inventory collection must not be overwritten by
+        // a stale task snapshot, even if it happened a few milliseconds ago.
+        const page=await alfGraphRequest(api,inventory.token,
+          '/pages/'+notionId);
+        const currentNotion=page&&page.object==='page'&&!page.in_trash&&
+          alfGraphId(page.id)===notionId&&
+          alfGraphId(page.parent&&page.parent.data_source_id)===
+            inventory.ids.board?
+            alfGraphItem(page,inventory.c):null;
+        const sourceUnchanged=!!currentNotion&&
+          currentNotion.projects.join(',')===n.projects.join(',')&&
+          currentNotion.parents.join(',')===n.parents.join(',')&&
+          currentNotion.kinds.slice().sort().join(',')===
+            n.kinds.slice().sort().join(',')&&
+          fields.every(k=>alfGraphTaskPlanningValues(
+            currentNotion,sp[0])?.notion[k]===pair.notion[k]);
         const fresh=await api.getTasks();
         const live=Array.isArray(fresh)?fresh.filter(t=>
           t&&t.id===spId&&alfGraphTaskClaim(t,notionId)):[];
         const current=live.length===1?
           alfGraphTaskPlanningValues(n,live[0]):null;
-        if(!current||Object.keys(toSp).some(k=>
+        if(!sourceUnchanged||!current||Object.keys(toSp).some(k=>
           current.sp[k]!==pair.sp[k])){
           stats.conflicts++;
         }else{
@@ -2549,6 +2586,18 @@ async function alfGraphSyncTaskProjects(api,inventory,plan,options={}){
       const nc=notion!==anchor.project,sc=local!==anchor.project;
       if(nc===sc){stats.conflicts++;continue;}
       if(nc){
+        const page=await alfGraphRequest(api,inventory.token,
+          '/pages/'+notionId);
+        const current=page&&page.object==='page'&&!page.in_trash&&
+          alfGraphId(page.id)===notionId&&
+          alfGraphId(page.parent&&page.parent.data_source_id)===
+            inventory.ids.board?
+          alfGraphItem(page,inventory.c):null;
+        if(!current||current.projects.length!==n.projects.length||
+          (current.projects[0]||null)!==notion||
+          current.parents.length||current.title!==n.title){
+          stats.conflicts++;continue;
+        }
         const live=await api.getTasks();
         if(!Array.isArray(live)||live.filter(x=>x&&x.id===spId&&
           alfGraphTaskClaim(x,notionId)&&!x.parentId&&
