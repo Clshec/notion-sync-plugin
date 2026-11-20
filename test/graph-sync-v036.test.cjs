@@ -64,6 +64,11 @@ function fixture(inventory=sample()){
     async loadSyncedData(k){return saved.get(k)||null;},
     async persistDataSynced(v,k){events.push(['save',k]);saved.set(k,v);},
     async getAllProjects(){return projects.map(p=>({...p}));},
+    async updateProject(id,changes){
+      const p=projects.find(x=>x.id===id);
+      if(!p)throw new Error('missing SP project');
+      Object.assign(p,changes);events.push(['updateProject',id,changes.title]);
+    },
     async getTasks(){return tasks.map(t=>({...t}));},
     async getArchivedTasks(){return [];},
     async addProject(p){
@@ -124,7 +129,7 @@ test('verified lower project and bundle graph creates native persistent SP entit
   assert.equal(review.projects.length,0);
   assert.equal(review.tasks.length,0);
 });
-test('SP-created tasks and projects are planned for reverse Notion creation, never guessed a parent',async()=>{
+test('SP-created small projects and tasks require no extra parent selection and never invent an upper parent',async()=>{
   const x=sample();
   x.spProjects=[{id:'sp-native-project',title:'New small project'}];
   x.spActive=[{id:'native-task',title:'New focus task',projectId:'sp-native-project',
@@ -135,24 +140,83 @@ test('SP-created tasks and projects are planned for reverse Notion creation, nev
   assert.equal(plan.exportsProjects.length,1);
   assert.equal(plan.exportsTasks.length,1);
   const noParent=await run('alfGraphApplyRemote',f.api,x,plan,'');
-  assert.equal(noParent.projects,0);
-  assert.equal(noParent.tasks,0);
-  assert.equal(f.events.some(e=>e[0]==='notion'),false);
-  const applied=await run('alfGraphApplyRemote',f.api,x,plan,upper);
-  assert.equal(applied.projects,1);
-  assert.equal(applied.tasks,1);
+  assert.equal(noParent.projects,1);
+  assert.equal(noParent.tasks,1);
   const posts=f.events.filter(e=>e[0]==='notion'&&e[2]==='POST');
   assert.equal(posts.length,2);
   assert.equal(posts[0][3].parent.data_source_id,small);
+  assert.equal(posts[0][3].properties['العنصر الأب'],undefined,
+    'the SP project is unassigned; no major project parent was fabricated');
   assert.equal(posts[1][3].parent.data_source_id,board);
   assert.equal(posts[1][3].properties['نوع الصفحة'].multi_select[0].name,'مهمة');
   assert.equal(posts[1][3].properties['الوقت الفعلي'].number,0.25);
   assert.match(f.tasks[0].notes,/Personal note\nalf-notion-page-id:/);
   // Replaying with the same reviewed plan refuses a second POST.
-  const replay=await run('alfGraphApplyRemote',f.api,x,plan,upper);
+  const replay=await run('alfGraphApplyRemote',f.api,x,plan,'');
   assert.equal(replay.projects,0);
   assert.equal(replay.tasks,0);
   assert.equal(f.events.filter(e=>e[0]==='notion').length,2);
+});
+test('when a verified upper project is provided it is preserved for an SP-origin small project',async()=>{
+  const x=sample();
+  x.spProjects=[{id:'sp-native-project',title:'New small project'}];
+  const f=fixture(x),p=await run('alfGraphPlan',f.api,x);
+  const result=await run('alfGraphApplyRemote',f.api,x,p,upper);
+  assert.equal(result.projects,1);
+  const post=f.events.find(e=>e[0]==='notion'&&e[2]==='POST');
+  assert.equal(post[3].properties['العنصر الأب'].relation[0].id,upper);
+});
+test('unassigned SP-created lower project is recognized by persisted identity, unrelated orphan pages remain excluded',async()=>{
+  const linked=folder,unrelated=uid('a'),x=sample();
+  x.spProjects=[{id:'sp-existing',title:'SP-created small project'}];
+  x.tasks=[];
+  const f=fixture(x);
+  f.saved.set('alf-mapping-v2',JSON.stringify(mapping()));
+  f.saved.set('alf-graph-project-v1-'+linked,JSON.stringify({
+    version:1,notionId:linked,spId:'sp-existing'}));
+  f.api.getSecret=async key=>key==='alf-notion-token'?
+    'ntn_FAKE_TEST_ONLY':null;
+  const smallRow=(id,title)=>({id,object:'page',
+    created_time:'2026-11-19T00:00:00Z',properties:{
+      Name:{type:'title',title:[{plain_text:title}]},
+      'النوع  ':{type:'multi_select',multi_select:[]},
+      'العنصر الأب':{type:'relation',relation:[]},
+      'المجلد الأب الفرعي':{type:'relation',relation:[]}
+    }});
+  f.api.request=async(uri,opts)=>{
+    const source=uri.split('/data_sources/')[1]||'';
+    const isQuery=source.endsWith('/query');
+    const id=source.replace(/\/query$/,'');
+    if(!isQuery){
+      if(id===upper)return {properties:{
+        Name:{type:'title'},'النظام':{type:'select'}}};
+      if(id===small)return {properties:{
+        Name:{type:'title'},'العنصر الأب':{type:'relation'},
+        'النوع  ':{type:'multi_select'}}};
+      if(id===board)return {properties:Object.fromEntries(
+        Object.entries(keys).map(([key,[name,type]])=>[
+          name,{id:key+'-id',type}]))};
+    }
+    if(isQuery){
+      if(id===upper)return {results:[{id:upper,properties:{
+        Name:{type:'title',title:[{plain_text:'Main project'}]},
+        'النظام':{type:'select',select:{name:'مشروع'}}}
+      }],has_more:false};
+      if(id===small)return {results:[
+        smallRow(linked,'SP-created small project'),
+        smallRow(unrelated,'Unrelated orphan knowledge')],
+        has_more:false};
+      if(id===board)return {results:[],has_more:false};
+    }
+    throw new Error('Unexpected Notion test URL '+uri);
+  };
+  const inv=await run('alfGraphInventory',f.api);
+  assert.equal(inv.projects.length,1);
+  assert.equal(inv.projects[0].id,linked);
+  assert.equal(inv.projects[0].parent,null);
+  const plan=await run('alfGraphPlan',f.api,inv);
+  assert.equal(plan.links.projects.get(linked),'sp-existing');
+  assert.equal(plan.exportsProjects.length,0);
 });
 test('a failed Notion create leaves durable attempted intent and is never retried',async()=>{
   const x=sample();x.spProjects=[{id:'native-project',title:'Native project'}];
@@ -174,6 +238,189 @@ test('unknown project name collision blocks auto duplicate without guessing iden
   const applied=await run('alfGraphApplyLocal',f.api,x,p);
   assert.equal(applied.projects,1);
   assert.equal(f.events.some(e=>e[0]==='addProject'),false);
+});
+test('linked small-project rename in Notion updates native SP Project without duplicate',async()=>{
+  const x=sample();
+  x.spProjects=[{id:'sp-project-1',title:'Verified small project'}];
+  const f=fixture(x);
+  f.saved.set('alf-graph-project-v1-'+small,JSON.stringify({
+    version:1,notionId:small,spId:'sp-project-1'}));
+  const plan=await run('alfGraphPlan',f.api,x);
+  const initial=await run('alfGraphSyncProjectTitles',f.api,x,plan);
+  assert.equal(initial.anchored,1);
+  x.projects[0].name='Renamed in Notion';
+  const updated=await run('alfGraphSyncProjectTitles',f.api,x,plan);
+  assert.equal(updated.updatedSp,1);
+  assert.equal(updated.writtenNotion,0);
+  assert.equal(f.projects.length,1);
+  assert.equal(f.projects[0].title,'Renamed in Notion');
+  assert.equal(f.events.filter(e=>e[0]==='addProject').length,0);
+});
+test('native SP small-project rename writes only original Notion title after exact preflight',async()=>{
+  const x=sample();
+  x.spProjects=[{id:'sp-project-1',title:'Verified small project'}];
+  const f=fixture(x);
+  f.saved.set('alf-graph-project-v1-'+small,JSON.stringify({
+    version:1,notionId:small,spId:'sp-project-1'}));
+  const plan=await run('alfGraphPlan',f.api,x);
+  await run('alfGraphSyncProjectTitles',f.api,x,plan);
+  x.spProjects[0].title='Renamed from Super Productivity';
+  f.projects[0].title='Renamed from Super Productivity';
+  f.api.request=async(uri,opts)=>{
+    f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET'&&uri.endsWith('/pages/'+small))
+      return {id:small,object:'page',parent:{data_source_id:small},
+        properties:{Name:{type:'title',
+          title:[{plain_text:'Verified small project'}]}}};
+    if(opts.method==='PATCH'&&uri.endsWith('/pages/'+small))
+      return {id:small,object:'page'};
+    throw new Error('Unexpected Notion project request');
+  };
+  const updated=await run('alfGraphSyncProjectTitles',f.api,x,plan);
+  assert.equal(updated.writtenNotion,1);
+  const patch=f.events.find(e=>e[0]==='notion'&&e[2]==='PATCH');
+  assert.deepEqual(Object.keys(patch[3].properties),['Name']);
+  assert.equal(patch[3].properties.Name.title[0].text.content,
+    'Renamed from Super Productivity');
+});
+test('concurrent divergent small-project renames refuse to overwrite either side',async()=>{
+  const x=sample();
+  x.spProjects=[{id:'sp-project-1',title:'Verified small project'}];
+  const f=fixture(x);
+  f.saved.set('alf-graph-project-v1-'+small,JSON.stringify({
+    version:1,notionId:small,spId:'sp-project-1'}));
+  const plan=await run('alfGraphPlan',f.api,x);
+  await run('alfGraphSyncProjectTitles',f.api,x,plan);
+  x.projects[0].name='Notion new name';
+  x.spProjects[0].title='Different SP new name';
+  const result=await run('alfGraphSyncProjectTitles',f.api,x,plan);
+  assert.equal(result.conflicts,1);
+  assert.equal(result.writtenNotion,0);
+  assert.equal(result.updatedSp,0);
+  assert.equal(f.events.some(e=>e[0]==='notion'),false);
+});
+function linkedPlanningFixture(){
+  const x=sample();
+  x.tasks=[run('alfGraphItem',row(child,'Child A',['مهمة'],small),
+    mapping())];
+  const dashed=child.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,
+    '$1-$2-$3-$4-$5');
+  x.spActive=[{id:'sp-planned',title:'Child A',notes:
+    'alf-notion-page-id:'+dashed,projectId:'INBOX_PROJECT',
+    timeEstimate:5400000,dueDay:'2026-11-18',isDone:false,
+    subTaskIds:[]}];
+  const f=fixture(x);
+  const plan={links:{tasks:new Map([[child,'sp-planned']])}};
+  return {x,f,plan};
+}
+test('linked task title edit in Notion automatically updates native SP task',async()=>{
+  const o=linkedPlanningFixture();
+  const initial=await run('alfGraphSyncTaskPlanning',
+    o.f.api,o.x,o.plan);
+  assert.equal(initial.anchored,1);
+  o.x.tasks[0].title='Updated in Notion';
+  const res=await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
+  assert.equal(res.updatedSp,1);
+  assert.equal(o.f.tasks[0].title,'Updated in Notion');
+  assert.equal(o.f.events.some(e=>e[0]==='notion'),false);
+});
+test('linked SP title, estimate and due-day edits PATCH exact original pinned Notion fields',async()=>{
+  const o=linkedPlanningFixture();
+  await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
+  o.x.spActive[0].title='Edited in SP';
+  o.x.spActive[0].timeEstimate=7200000;
+  o.x.spActive[0].dueDay='2026-11-20';
+  Object.assign(o.f.tasks[0],{
+    title:'Edited in SP',timeEstimate:7200000,dueDay:'2026-11-20'});
+  o.f.api.request=async(uri,opts)=>{
+    o.f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET'&&uri.endsWith('/pages/'+child))
+      return row(child,'Child A',['مهمة'],small);
+    if(opts.method==='PATCH'&&uri.endsWith('/pages/'+child))
+      return {id:child,object:'page'};
+    throw new Error('Unexpected planning endpoint');
+  };
+  const res=await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
+  assert.equal(res.writtenNotion,1);
+  const patch=o.f.events.find(e=>e[0]==='notion'&&e[2]==='PATCH');
+  assert.deepEqual(Object.keys(patch[3].properties).sort(),
+    ['titleProp-id','estimateProp-id','executionProp-id'].sort());
+  assert.equal(patch[3].properties['titleProp-id'].title[0].text.content,
+    'Edited in SP');
+  assert.equal(patch[3].properties['estimateProp-id'].number,2);
+  assert.equal(patch[3].properties['executionProp-id'].date.start,
+    '2026-11-20');
+});
+test('divergent simultaneous Notion and SP task title edits never overwrite each other',async()=>{
+  const o=linkedPlanningFixture();
+  await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
+  o.x.tasks[0].title='Notion edit';
+  o.x.spActive[0].title='SP edit';
+  const res=await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
+  assert.equal(res.conflicts,1);
+  assert.equal(res.updatedSp,0);
+  assert.equal(res.writtenNotion,0);
+  assert.equal(o.f.events.some(e=>e[0]==='notion'),false);
+});
+test('timed native due date cannot be silently rewritten by a date-only Notion field',async()=>{
+  const o=linkedPlanningFixture();
+  o.x.spActive[0].dueWithTime=1763550000000;
+  const res=await run('alfGraphSyncTaskPlanning',o.f.api,o.x,o.plan);
+  assert.equal(res.skipped,1);
+  assert.equal(res.writtenNotion,0);
+});
+function linkedTaskProjectFixture(){
+  const x=sample(),projectSpId='sp-linked-project';
+  x.tasks=[run('alfGraphItem',row(child,'Child A',['مهمة'],small),
+    mapping())];
+  x.spProjects=[{id:projectSpId,title:'Verified small project'}];
+  const dashed=child.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/,
+    '$1-$2-$3-$4-$5');
+  x.spActive=[{id:'sp-linked-task',title:'Child A',projectId:projectSpId,
+    notes:'alf-notion-page-id:'+dashed,isDone:false,
+    timeEstimate:5400000,dueDay:'2026-11-18',subTaskIds:[]}];
+  const f=fixture(x);
+  const plan={links:{
+    projects:new Map([[small,projectSpId]]),
+    tasks:new Map([[child,'sp-linked-task']])
+  }};
+  return {x,f,plan};
+}
+test('Notion moves a linked top-level task to Inbox using native SP project move',async()=>{
+  const o=linkedTaskProjectFixture();
+  const init=await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
+  assert.equal(init.anchored,1);
+  o.x.tasks[0].projects=[];
+  const moved=await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
+  assert.equal(moved.updatedSp,1);
+  assert.equal(o.f.tasks[0].projectId,null);
+  assert.equal(moved.writtenNotion,0);
+});
+test('SP top-level task project move patches only the original Notion relation field',async()=>{
+  const o=linkedTaskProjectFixture();
+  await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
+  o.x.spActive[0].projectId='INBOX_PROJECT';
+  o.f.tasks[0].projectId='INBOX_PROJECT';
+  o.f.api.request=async(uri,opts)=>{
+    o.f.events.push(['notion',uri,opts.method,opts.body]);
+    if(opts.method==='GET')return row(child,'Child A',['مهمة'],small);
+    if(opts.method==='PATCH')return {id:child,object:'page'};
+    throw new Error('Unexpected project move request');
+  };
+  const res=await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
+  assert.equal(res.writtenNotion,1);
+  const patch=o.f.events.find(e=>e[0]==='notion'&&e[2]==='PATCH');
+  assert.deepEqual(Object.keys(patch[3].properties),['projectProp-id']);
+  assert.equal(patch[3].properties['projectProp-id'].relation.length,0);
+});
+test('a linked subtask cannot be moved by writing parentId via unsafe SP API',async()=>{
+  const o=linkedTaskProjectFixture();
+  o.x.tasks[0].parents=[bundle];
+  o.x.spActive[0].parentId='native-parent';
+  const res=await run('alfGraphSyncTaskProjects',o.f.api,o.x,o.plan);
+  assert.equal(res.skipped,1);
+  assert.equal(res.updatedSp,0);
+  assert.equal(res.writtenNotion,0);
 });
 test('linked SP task completion updates exactly its original Notion Status, not another field',async()=>{
   const x=sample();
@@ -435,6 +682,16 @@ test('recent Notion task created just before enabling device sync is recovered w
   const p=run('alfGraphOnlyNewEntities',plan,now-1000);
   assert.equal(p.tasks.length,1);
   assert.equal(p.tasks[0].title,'Recent task');
+});
+test('brand-new SP project without optional created timestamp is synced after one-token baseline',()=>{
+  const plan={projects:[],tasks:[],exportsTasks:[],exportsProjects:[
+    {spId:'old-project',title:'Old pre-connection project',createdAt:null},
+    {spId:'new-project',title:'New after connection',createdAt:null}
+  ]};
+  const p=run('alfGraphOnlyNewEntities',plan,Date.now()-1000,{
+    spProjectIdsBefore:new Set(['old-project'])});
+  assert.equal(p.exportsProjects.length,1);
+  assert.equal(p.exportsProjects[0].spId,'new-project');
 });
 test('Notion incremental timestamp probe only reads original sources with pinned work filter',async()=>{
   const x=sample();const f=fixture(x);

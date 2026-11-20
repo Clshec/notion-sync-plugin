@@ -1762,19 +1762,37 @@ async function alfGraphInventory(api) {
     .map(p=>({id:alfGraphId(p.id),name:alfGraphTitle(p,'Name')}))
     .filter(p=>p.id&&p.name);
   const upperProjects=new Set(upperChoices.map(p=>p.id));
-  const projects=lower.map(p=>{
+  const projectRows=await Promise.all(lower.map(async p=>{
     if(p.in_trash)return null;
     const name=alfGraphTitle(p,'Name');
     const kinds=alfGraphKinds(p,'النوع  ');
     const parents=alfGraphRelation(p,'العنصر الأب');
     const folderParent=alfGraphRelation(p,'المجلد الأب الفرعي');
-    if(!name||name.length>160||parents.length!==1||
-       !upperProjects.has(parents[0])||folderParent.length||
+    if(!name||name.length>160||parents.length>1||folderParent.length||
        kinds.some(k=>['مجلد رئيسي','مجلد فرعي','كورس','دبلومة',
          'فيديو','مصدر مقالات'].includes(k)))return null;
-    return {id:alfGraphId(p.id),name,parent:parents[0],
+    const validUpper=parents.length===1&&upperProjects.has(parents[0]);
+    // SP projects imported without a chosen upper project are stored as
+    // *unassigned* small projects in this same original lower database.
+    // Only our independently persisted SP identity allows that exception.
+    // Never adopt arbitrary unparented Notion notes/folders as projects.
+    let knownOrigin=false;
+    if(parents.length===0){
+      const raw=await api.loadSyncedData(
+        ALF_GRAPH_PROJECT_LINK_PREFIX+alfGraphId(p.id));
+      if(raw){
+        let link;
+        try{link=JSON.parse(raw);}catch(_){}
+        knownOrigin=!!(link&&link.version===1&&
+          link.notionId===alfGraphId(p.id)&&
+          typeof link.spId==='string'&&link.spId);
+      }
+    }
+    if(!validUpper&&!knownOrigin)return null;
+    return {id:alfGraphId(p.id),name,parent:parents[0]||null,
       createdAt:Date.parse(p.created_time)||null};
-  }).filter(Boolean);
+  }));
+  const projects=projectRows.filter(Boolean);
   const tasks=board.map(p=>p.in_trash?null:alfGraphItem(p,cfg.c)).filter(Boolean);
   if(tasks.some(t=>!t.id))
     throw new Error('Invalid original board task IDs');
@@ -2039,6 +2057,9 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
       try {
         await api.persistDataSynced(JSON.stringify({version:1,notionId:p.id,
           spId:p.adoptSpId}),ALF_GRAPH_PROJECT_LINK_PREFIX+p.id);
+        await api.persistDataSynced(JSON.stringify({version:1,
+          notionId:p.id,spId:p.adoptSpId,sourceId:inventory.ids.lower,
+          title:p.name}),ALF_GRAPH_PROJECT_TITLE_ANCHOR_PREFIX+p.id);
         pids.set(p.id,p.adoptSpId);result.projects++;writeSlots--;
       }catch(_){result.errors++;}
       continue;
@@ -2051,6 +2072,9 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
       if(typeof id!=='string'||!id)throw new Error('SP project creation not confirmed');
       await api.persistDataSynced(JSON.stringify({version:1,notionId:p.id,
         spId:id}),ALF_GRAPH_PROJECT_LINK_PREFIX+p.id);
+      await api.persistDataSynced(JSON.stringify({version:1,
+        notionId:p.id,spId:id,sourceId:inventory.ids.lower,
+        title:p.name}),ALF_GRAPH_PROJECT_TITLE_ANCHOR_PREFIX+p.id);
       pids.set(p.id,id);result.projects++;writeSlots--;
     }catch(_){result.errors++;}
   }
@@ -2088,6 +2112,13 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
           spDone:false,notionStatus:t.status}),
         ALF_GRAPH_STATUS_ANCHOR_PREFIX+t.id);
       }
+      await api.persistDataSynced(JSON.stringify({version:1,
+        notionId:t.id,spId:id,sourceId:inventory.ids.board,
+        values:{title:t.title,estimateMs:t.estimateMs??0,
+          due:t.due||null}}),ALF_GRAPH_TASK_FIELDS_ANCHOR_PREFIX+t.id);
+      await api.persistDataSynced(JSON.stringify({version:1,
+        notionId:t.id,spId:id,sourceId:inventory.ids.board,
+        project:t.project||null}),ALF_GRAPH_TASK_PROJECT_ANCHOR_PREFIX+t.id);
       tids.set(t.id,id);result.tasks++;writeSlots--;
     }catch(_){result.errors++;}
   }
@@ -2100,6 +2131,9 @@ const ALF_GRAPH_PROJECT_INTENT_PREFIX='alf-graph-project-export-v1-';
 const ALF_GRAPH_TASK_INTENT_PREFIX='alf-graph-task-export-v1-';
 const ALF_GRAPH_STATUS_ANCHOR_PREFIX='alf-graph-status-v1-';
 const ALF_GRAPH_TIME_ANCHOR_PREFIX='alf-graph-time-v1-';
+const ALF_GRAPH_PROJECT_TITLE_ANCHOR_PREFIX='alf-graph-project-title-v1-';
+const ALF_GRAPH_TASK_FIELDS_ANCHOR_PREFIX='alf-graph-fields-v1-';
+const ALF_GRAPH_TASK_PROJECT_ANCHOR_PREFIX='alf-graph-task-project-v1-';
 const ALF_GRAPH_AUTO_KEY='alf-auto-graph-local-enabled-v1';
 const ALF_GRAPH_CUTOVER_KEY='alf-auto-graph-cutover-v1';
 const ALF_GRAPH_AUTO_PARENT_KEY='alf-auto-graph-parent-v1';
@@ -2141,7 +2175,6 @@ async function alfGraphApplyRemote(api,inventory,plan,upperParentId,options={}){
   for(const project of projectsToExport){
     if(!slots)break;
     const spId=alfGraphSpId(project.spId);
-    if(!upper){skip('noUpperProject');continue;}
     const key=ALF_GRAPH_PROJECT_INTENT_PREFIX+spId;
     // An earlier operation may have committed despite a lost response.
     if(await api.loadSyncedData(key)){counts.pending++;continue;}
@@ -2152,23 +2185,30 @@ async function alfGraphApplyRemote(api,inventory,plan,upperParentId,options={}){
     // The promise below can resolve after Notion has already created a page.
     // An attempted ledger prevents a second create when the outcome is unknown.
     await api.persistDataSynced(JSON.stringify({version:1,status:'attempted',
-      spId,sourceId:ids.lower,parent:upper}),key);
+      spId,sourceId:ids.lower,parent:upper||null}),key);
     slots--;
     try{
+      const properties={
+        'Name':{title:[{text:{content:project.title}}]}
+      };
+      // Never guess a major parent. Unassigned is still a real native
+      // small-project row in the existing lower Notion source; its stored
+      // SP ID makes it unambiguous on the next discovery.
+      if(upper)properties['العنصر الأب']={relation:[{id:upper}]};
       const page=await alfGraphRequest(api,token,'/pages','POST',{
         parent:{type:'data_source_id',data_source_id:ids.lower},
-        properties:{
-          'Name':{title:[{text:{content:project.title}}]},
-          'العنصر الأب':{relation:[{id:upper}]}
-        }
+        properties
       });
       const nid=alfGraphId(page&&page.id);
       if(!nid||alfGraphId(page&&page.parent&&page.parent.data_source_id)!==ids.lower)
         throw new Error('Unconfirmed Notion project create');
       await api.persistDataSynced(JSON.stringify({version:1,notionId:nid,
         spId}),ALF_GRAPH_PROJECT_LINK_PREFIX+nid);
+      await api.persistDataSynced(JSON.stringify({version:1,
+        notionId:nid,spId,sourceId:ids.lower,title:project.title}),
+      ALF_GRAPH_PROJECT_TITLE_ANCHOR_PREFIX+nid);
       await api.persistDataSynced(JSON.stringify({version:1,status:'committed',
-        spId,notionId:nid,sourceId:ids.lower,parent:upper}),key);
+        spId,notionId:nid,sourceId:ids.lower,parent:upper||null}),key);
       pids.set(spId,nid);counts.projects++;
     }catch(_){counts.errors++;counts.pending++;}
   }
@@ -2204,9 +2244,11 @@ async function alfGraphApplyRemote(api,inventory,plan,upperParentId,options={}){
     if(notionProject)properties[c.projectProp]={relation:[{id:notionProject}]};
     if(notionParent)properties[c.parentProp]={relation:[{id:notionParent}]};
     if(Number.isSafeInteger(t.timeEstimate)&&t.timeEstimate>0)
-      properties[c.estimateProp]={number:t.timeEstimate/3600000};
+      properties[c.estimateProp]={number:t.timeEstimate/
+        (c.unit==='hours'?3600000:60000)};
     if(Number.isSafeInteger(t.timeSpent)&&t.timeSpent>0)
-      properties[c.actualProp]={number:t.timeSpent/3600000};
+      properties[c.actualProp]={number:t.timeSpent/
+        (c.unit==='hours'?3600000:60000)};
     if(typeof t.dueDay==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(t.dueDay))
       properties[c.executionProp]={date:{start:t.dueDay}};
     await api.persistDataSynced(JSON.stringify({version:1,status:'attempted',
@@ -2232,10 +2274,323 @@ async function alfGraphApplyRemote(api,inventory,plan,upperParentId,options={}){
         notionId:nid,spId,sourceId:ids.board,
         spDone:t.isDone,notionStatus:t.isDone?'Done':'Not started'}),
       ALF_GRAPH_STATUS_ANCHOR_PREFIX+nid);
+      await api.persistDataSynced(JSON.stringify({version:1,
+        notionId:nid,spId,sourceId:ids.board,
+        values:{title:t.title,estimateMs:t.timeEstimate||0,
+          due:t.dueDay||null}}),ALF_GRAPH_TASK_FIELDS_ANCHOR_PREFIX+nid);
+      await api.persistDataSynced(JSON.stringify({version:1,
+        notionId:nid,spId,sourceId:ids.board,
+        project:notionProject||null}),
+      ALF_GRAPH_TASK_PROJECT_ANCHOR_PREFIX+nid);
       notionTaskIds.set(spId,nid);counts.tasks++;
     }catch(_){counts.errors++;counts.pending++;}
   }
   return counts;
+}
+// Stable Notion ↔ SP small-project title reconciliation. Only the source
+// that changed alone from the LAST agreed value may update its peer.
+// Conflicting simultaneous edits are intentionally left untouched.
+async function alfGraphSyncProjectTitles(api,inventory,plan,options={}){
+  const stats={anchored:0,updatedSp:0,writtenNotion:0,
+    conflicts:0,skipped:0,errors:0};
+  if(typeof api.updateProject!=='function')return {...stats,errors:1};
+  const max=Number.isInteger(options.max)&&options.max>0?
+    Math.min(options.max,16):4;
+  let count=0;
+  for(const [notionId,spId] of plan.links.projects){
+    if(count++>=max)break;
+    const p=inventory.projects.find(x=>x.id===notionId);
+    const matches=inventory.spProjects.filter(x=>x&&x.id===spId&&
+      x.isArchived!==true);
+    if(!p||matches.length!==1||!p.name){stats.skipped++;continue;}
+    const sp=matches[0],key=ALF_GRAPH_PROJECT_TITLE_ANCHOR_PREFIX+notionId;
+    try{
+      const raw=await api.loadSyncedData(key);
+      const anchor=raw?JSON.parse(raw):null;
+      if(anchor&&(anchor.version!==1||anchor.notionId!==notionId||
+         anchor.spId!==spId||anchor.sourceId!==inventory.ids.lower||
+         typeof anchor.title!=='string'||!anchor.title)){
+        stats.conflicts++;continue;
+      }
+      if(!anchor){
+        if(p.name!==sp.title){stats.conflicts++;continue;}
+        await api.persistDataSynced(JSON.stringify({version:1,
+          notionId,spId,sourceId:inventory.ids.lower,title:p.name}),key);
+        stats.anchored++;continue;
+      }
+      if(p.name===sp.title){
+        if(p.name!==anchor.title){
+          await api.persistDataSynced(JSON.stringify({...anchor,title:p.name}),key);
+          stats.anchored++;
+        }else stats.skipped++;
+        continue;
+      }
+      const notionChanged=p.name!==anchor.title;
+      const spChanged=sp.title!==anchor.title;
+      if(notionChanged===spChanged){stats.conflicts++;continue;}
+      if(notionChanged){
+        const fresh=await api.getAllProjects();
+        if(!Array.isArray(fresh)||fresh.filter(x=>x.id===spId&&
+          x.title===anchor.title).length!==1){stats.conflicts++;continue;}
+        await api.updateProject(spId,{title:p.name});
+        stats.updatedSp++;
+      }else{
+        const page=await alfGraphRequest(api,inventory.token,'/pages/'+notionId);
+        if(!page||page.object!=='page'||page.in_trash||
+          alfGraphId(page.id)!==notionId||
+          alfGraphId(page.parent&&page.parent.data_source_id)!==
+            inventory.ids.lower||
+          alfGraphTitle(page,'Name')!==anchor.title){
+          stats.conflicts++;continue;
+        }
+        const fresh=await api.getAllProjects();
+        if(!Array.isArray(fresh)||fresh.filter(x=>x.id===spId&&
+          x.title===sp.title).length!==1){stats.conflicts++;continue;}
+        const response=await alfGraphRequest(api,inventory.token,
+          '/pages/'+notionId,'PATCH',{properties:{
+            'Name':{title:[{text:{content:sp.title}}]}
+          }});
+        if(!response||alfGraphId(response.id)!==notionId)
+          throw new Error('Notion project title PATCH outcome unconfirmed');
+        stats.writtenNotion++;
+      }
+      await api.persistDataSynced(JSON.stringify({...anchor,
+        title:notionChanged?p.name:sp.title}),key);
+    }catch(_){stats.errors++;}
+  }
+  return stats;
+}
+// Bidirectional native task title, estimated work and date-only due day.
+// One baseline per exact Notion-page/SP-task pair. No last-writer-wins,
+// unreviewed rich-text replacement, or rewriting actual tracked work time.
+// Parent relations are excluded: SP v20's updateTask explicitly rejects
+// parentId mutations because they orphan subtasks without updating the tree.
+function alfGraphTaskPlanningValues(notion,sp){
+  const n={title:notion.title,estimateMs:notion.estimateMs??0,
+    due:notion.due||null};
+  if(!sp||typeof sp.title!=='string'||!sp.title.trim()||
+     !Number.isSafeInteger(sp.timeEstimate??0)||
+     (sp.timeEstimate??0)<0||
+     (sp.dueDay && !/^\d{4}-\d{2}-\d{2}$/.test(sp.dueDay))||
+     sp.dueWithTime)return null;
+  const s={title:sp.title,estimateMs:sp.timeEstimate??0,
+    due:sp.dueDay||null};
+  return {notion:n,sp:s};
+}
+async function alfGraphSyncTaskPlanning(api,inventory,plan,options={}){
+  const stats={anchored:0,updatedSp:0,writtenNotion:0,
+    conflicts:0,skipped:0,errors:0};
+  if(typeof api.updateTask!=='function')return {...stats,errors:1};
+  if(typeof api.getSecret==='function'&&
+     await api.getSecret(ALF_AUTO_PLAN_FLAG)==='enabled')
+    return stats; // Older opt-in planning engine owns these fields.
+  const max=Number.isInteger(options.max)&&options.max>0?
+    Math.min(options.max,20):8;
+  let seen=0;
+  for(const [notionId,spId] of plan.links.tasks){
+    if(seen++>=max)break;
+    const n=inventory.tasks.find(p=>p.id===notionId);
+    const sp=inventory.spActive.filter(t=>t&&t.id===spId&&
+      !t.repeatCfgId&&alfGraphTaskClaim(t,notionId));
+    if(!n||sp.length!==1){stats.skipped++;continue;}
+    const pair=alfGraphTaskPlanningValues(n,sp[0]);
+    if(!pair){stats.skipped++;continue;}
+    const key=ALF_GRAPH_TASK_FIELDS_ANCHOR_PREFIX+notionId;
+    try{
+      const raw=await api.loadSyncedData(key);
+      let anchor=raw?JSON.parse(raw):null;
+      if(anchor&&(anchor.version!==1||anchor.notionId!==notionId||
+         anchor.spId!==spId||anchor.sourceId!==inventory.ids.board||
+         !anchor.values||typeof anchor.values.title!=='string'||
+         !Number.isSafeInteger(anchor.values.estimateMs)||
+         anchor.values.estimateMs<0||
+         (anchor.values.due!==null&&typeof anchor.values.due!=='string'))){
+        stats.conflicts++;continue;
+      }
+      const fields=['title','estimateMs','due'];
+      if(!anchor){
+        if(fields.some(k=>pair.notion[k]!==pair.sp[k])){
+          stats.conflicts++;continue; // Cannot infer which old edit wins.
+        }
+        anchor={version:1,notionId,spId,sourceId:inventory.ids.board,
+          values:pair.notion};
+        await api.persistDataSynced(JSON.stringify(anchor),key);
+        stats.anchored++;continue;
+      }
+      const toSp={},toNotion={},bothEqual={};
+      for(const field of fields){
+        const base=anchor.values[field];
+        const notion=pair.notion[field],local=pair.sp[field];
+        const nc=notion!==base,sc=local!==base;
+        if(nc&&sc){
+          if(notion===local)bothEqual[field]=notion;
+          else stats.conflicts++;
+        }else if(nc)toSp[field]=notion;
+        else if(sc)toNotion[field]=local;
+      }
+      let values={...anchor.values,...bothEqual};
+      if(Object.keys(toSp).length){
+        const fresh=await api.getTasks();
+        const live=Array.isArray(fresh)?fresh.filter(t=>
+          t&&t.id===spId&&alfGraphTaskClaim(t,notionId)):[];
+        const current=live.length===1?
+          alfGraphTaskPlanningValues(n,live[0]):null;
+        if(!current||Object.keys(toSp).some(k=>
+          current.sp[k]!==pair.sp[k])){
+          stats.conflicts++;
+        }else{
+          const changes={};
+          if('title' in toSp)changes.title=toSp.title;
+          if('estimateMs' in toSp)changes.timeEstimate=toSp.estimateMs;
+          if('due' in toSp)changes.dueDay=toSp.due;
+          await api.updateTask(spId,changes,{isIgnoreShortSyntax:true});
+          values={...values,...toSp};
+          stats.updatedSp++;
+        }
+      }
+      if(Object.keys(toNotion).length){
+        const page=await alfGraphRequest(api,inventory.token,
+          '/pages/'+notionId);
+        if(!page||page.object!=='page'||page.in_trash||
+          alfGraphId(page.id)!==notionId||
+          alfGraphId(page.parent&&page.parent.data_source_id)!==
+            inventory.ids.board){
+          stats.conflicts++;
+        }else{
+          const current=alfGraphItem(page,inventory.c);
+          const now=current?alfGraphTaskPlanningValues(current,sp[0]):null;
+          const live=await api.getTasks();
+          const spLive=Array.isArray(live)?live.filter(t=>
+            t&&t.id===spId&&alfGraphTaskClaim(t,notionId)):[];
+          const latest=current&&spLive.length===1?
+            alfGraphTaskPlanningValues(current,spLive[0]):null;
+          if(!now||!latest||Object.keys(toNotion).some(k=>
+            now.notion[k]!==pair.notion[k]||
+            latest.sp[k]!==pair.sp[k])){
+            stats.conflicts++;
+          }else{
+            const props={},pins=inventory.c.taskPropertyBindings;
+            if('title' in toNotion)
+              props[pins.titleProp.id]={title:[{text:{
+                content:toNotion.title}}]};
+            if('estimateMs' in toNotion)
+              props[pins.estimateProp.id]={number:toNotion.estimateMs?
+                toNotion.estimateMs/
+                  (inventory.c.unit==='hours'?3600000:60000):null};
+            if('due' in toNotion)
+              props[pins.executionProp.id]={date:toNotion.due?
+                {start:toNotion.due}:null};
+            const result=await alfGraphRequest(api,inventory.token,
+              '/pages/'+notionId,'PATCH',{properties:props});
+            if(!result||alfGraphId(result.id)!==notionId)
+              throw new Error('Unconfirmed task planning PATCH');
+            values={...values,...toNotion};
+            stats.writtenNotion++;
+          }
+        }
+      }
+      if(fields.some(k=>values[k]!==anchor.values[k]))
+        await api.persistDataSynced(JSON.stringify({...anchor,values}),key);
+      else if(!Object.keys(toSp).length&&!Object.keys(toNotion).length)
+        stats.skipped++;
+    }catch(_){stats.errors++;}
+  }
+  return stats;
+}
+// The official SP v20 updateTask API can move a TOP-LEVEL task to another
+// project using TaskMoveToProjectService (which preserves its children).
+// It must NOT be used to rewrite parentId of an existing subtask.
+async function alfGraphSyncTaskProjects(api,inventory,plan,options={}){
+  const stats={anchored:0,updatedSp:0,writtenNotion:0,
+    conflicts:0,skipped:0,errors:0};
+  const toSp=new Map(plan.links.projects);
+  const toNotion=new Map([...toSp].map(([notion,sp])=>[sp,notion]));
+  const max=Number.isInteger(options.max)&&options.max>0?
+    Math.min(options.max,16):4;
+  let checked=0;
+  for(const [notionId,spId] of plan.links.tasks){
+    if(checked++>=max)break;
+    const n=inventory.tasks.find(x=>x.id===notionId);
+    const sp=inventory.spActive.filter(x=>x&&x.id===spId&&
+      !x.repeatCfgId&&alfGraphTaskClaim(x,notionId));
+    if(!n||sp.length!==1||n.projects.length>1||
+       n.parents.length||sp[0].parentId){
+      stats.skipped++;continue; // Subtask moves need a tree API.
+    }
+    const notion=n.projects[0]||null;
+    const sid=sp[0].projectId;
+    const local=(!sid||sid==='INBOX_PROJECT')?null:toNotion.get(sid);
+    if(local===undefined||notion&&!toSp.has(notion)){
+      stats.conflicts++;continue; // Unknown project identity.
+    }
+    const key=ALF_GRAPH_TASK_PROJECT_ANCHOR_PREFIX+notionId;
+    try{
+      const raw=await api.loadSyncedData(key);
+      const anchor=raw?JSON.parse(raw):null;
+      if(anchor&&(anchor.version!==1||anchor.notionId!==notionId||
+         anchor.spId!==spId||anchor.sourceId!==inventory.ids.board||
+         (anchor.project!==null&&typeof anchor.project!=='string'))){
+        stats.conflicts++;continue;
+      }
+      if(!anchor){
+        if(notion!==local){stats.conflicts++;continue;}
+        await api.persistDataSynced(JSON.stringify({version:1,
+          notionId,spId,sourceId:inventory.ids.board,project:notion}),key);
+        stats.anchored++;continue;
+      }
+      if(notion===local){
+        if(notion!==anchor.project){
+          await api.persistDataSynced(JSON.stringify({...anchor,
+            project:notion}),key);
+          stats.anchored++;
+        }else stats.skipped++;
+        continue;
+      }
+      const nc=notion!==anchor.project,sc=local!==anchor.project;
+      if(nc===sc){stats.conflicts++;continue;}
+      if(nc){
+        const live=await api.getTasks();
+        if(!Array.isArray(live)||live.filter(x=>x&&x.id===spId&&
+          alfGraphTaskClaim(x,notionId)&&!x.parentId&&
+          x.projectId===sp[0].projectId).length!==1){
+          stats.conflicts++;continue;
+        }
+        await api.updateTask(spId,{projectId:notion?toSp.get(notion):null});
+        stats.updatedSp++;
+      }else{
+        const page=await alfGraphRequest(api,inventory.token,
+          '/pages/'+notionId);
+        const original=page&&page.object==='page'?
+          alfGraphItem(page,inventory.c):null;
+        if(!page||page.object!=='page'||page.in_trash||
+          alfGraphId(page.id)!==notionId||
+          alfGraphId(page.parent&&page.parent.data_source_id)!==
+            inventory.ids.board||
+          !original||original.projects.length!==(notion?1:0)||
+          (original.projects[0]||null)!==notion){
+          stats.conflicts++;continue;
+        }
+        const live=await api.getTasks();
+        if(!Array.isArray(live)||live.filter(x=>x&&x.id===spId&&
+          alfGraphTaskClaim(x,notionId)&&x.projectId===sp[0].projectId&&
+          !x.parentId).length!==1){
+          stats.conflicts++;continue;
+        }
+        const response=await alfGraphRequest(api,inventory.token,
+          '/pages/'+notionId,'PATCH',{properties:{
+            [inventory.c.taskPropertyBindings.projectProp.id]:{
+              relation:local?[{id:local}]:[]
+            }
+          }});
+        if(!response||alfGraphId(response.id)!==notionId)
+          throw new Error('Unconfirmed original task project move');
+        stats.writtenNotion++;
+      }
+      await api.persistDataSynced(JSON.stringify({...anchor,
+        project:nc?notion:local}),key);
+    }catch(_){stats.errors++;}
+  }
+  return stats;
 }
 // Exact task identity, three-way status baselines, no arbitrary last-writer
 // wins. This deliberately does not infer In progress from time tracking.
@@ -2635,6 +2990,11 @@ function alfGraphOnlyNewEntities(plan,sinceMs,options={}){
   const requiredNotionProjects=new Set(tasks.map(t=>t.project).filter(Boolean));
   const exportsTasks=plan.exportsTasks.filter(x=>
     Number.isSafeInteger(x.created)&&x.created>=sinceMs);
+  const spExisting=options.spProjectIdsBefore &&
+    typeof options.spProjectIdsBefore.has==='function'?
+    options.spProjectIdsBefore:null;
+  const requiredSpProjects=new Set(exportsTasks.map(t=>t.spProjectId)
+    .filter(x=>x&&x!=='INBOX_PROJECT'));
   // Likewise a newly created SP subtask needs the original SP parent to
   // become a Notion bundle if that parent has no Notion link yet.
   const requiredSpParents=new Set(exportsTasks.map(t=>t.parentSpId)
@@ -2644,7 +3004,10 @@ function alfGraphOnlyNewEntities(plan,sinceMs,options={}){
       (Number.isSafeInteger(p.createdAt)&&p.createdAt>=sinceMs)||
       requiredNotionProjects.has(p.id)),
     tasks,
-    exportsProjects:fresh(plan.exportsProjects),
+    exportsProjects:plan.exportsProjects.filter(p=>
+      (spExisting?!spExisting.has(p.spId):
+        Number.isSafeInteger(p.createdAt)&&p.createdAt>=sinceMs)||
+      requiredSpProjects.has(p.spId)),
     exportsTasks:plan.exportsTasks.filter(x=>
       (Number.isSafeInteger(x.created)&&x.created>=sinceMs)||
       requiredSpParents.has(x.spId))};
@@ -2672,8 +3035,21 @@ function alfCreateAutoGraphSync(api,options={}){
          !Number.isSafeInteger(cutoff.sinceMs))
         throw new Error('Enable graph with a safe initial baseline');
       const inventory=await inventoryFn(api);
+      const projectBaselineRaw=await api.loadSyncedData(
+        'alf-graph-sp-projects-at-connect-v1');
+      let spProjectIdsBefore=null;
+      if(projectBaselineRaw){
+        let record;
+        try{record=JSON.parse(projectBaselineRaw);}catch(_){}
+        if(record&&record.version===1&&
+           record.source===inventory.ids.board&&
+           Array.isArray(record.ids)&&record.ids.length<=10000&&
+           record.ids.every(id=>typeof id==='string'&&id.length<=120))
+          spProjectIdsBefore=new Set(record.ids);
+      }
       const plan=await alfGraphPlan(api,inventory);
-      const newPlan=alfGraphOnlyNewEntities(plan,cutoff.sinceMs);
+      const newPlan=alfGraphOnlyNewEntities(plan,cutoff.sinceMs,
+        {spProjectIdsBefore});
       if([newPlan.projects,newPlan.tasks,newPlan.exportsProjects,
         newPlan.exportsTasks].some(items=>items.length>40)){
         result.conflicts++;result.skipped++;
@@ -2687,12 +3063,18 @@ function alfCreateAutoGraphSync(api,options={}){
       const postLocalInventory=await inventoryFn(api);
       const postLocalPlan=await alfGraphPlan(api,postLocalInventory);
       const newPostLocalPlan=alfGraphOnlyNewEntities(postLocalPlan,
-        cutoff.sinceMs);
+        cutoff.sinceMs,{spProjectIdsBefore});
       const upper=await api.getSecret(ALF_GRAPH_AUTO_PARENT_KEY)||'';
       const remote=await alfGraphApplyRemote(api,postLocalInventory,
         newPostLocalPlan,upper,{maxWrites:1,preferNewest:true});
       const statuses=await alfGraphSyncStatuses(api,postLocalInventory,
         postLocalPlan);
+      const projectTitles=await alfGraphSyncProjectTitles(api,
+        postLocalInventory,postLocalPlan);
+      const planning=await alfGraphSyncTaskPlanning(api,
+        postLocalInventory,postLocalPlan);
+      const taskProjects=await alfGraphSyncTaskProjects(api,
+        postLocalInventory,postLocalPlan);
       const time=await alfGraphSyncTrackedTime(api,postLocalInventory,
         postLocalPlan);
       const pomo=await api.getSecret(ALF_POMO_AUTO_KEY)==='enabled'?
@@ -2702,14 +3084,18 @@ function alfCreateAutoGraphSync(api,options={}){
         postLocalPlan.exportsProjects.length+postLocalPlan.exportsTasks.length;
       result.written=local.projects+local.tasks+
         remote.projects+remote.tasks+statuses.written+pomo.written+
-        time.written;
+        time.written+projectTitles.updatedSp+projectTitles.writtenNotion+
+        planning.updatedSp+planning.writtenNotion+
+        taskProjects.updatedSp+taskProjects.writtenNotion;
       result.timeWritten=time.written;
       result.skipped=local.skipped+remote.skipped+remote.pending+
         statuses.skipped+pomo.pending+time.skipped;
       result.conflicts=postLocalPlan.skipped.conflicts+statuses.conflicts+
-        time.conflicts;
+        time.conflicts+projectTitles.conflicts+planning.conflicts+
+        taskProjects.conflicts;
       result.errors=local.errors+remote.errors+statuses.errors+pomo.errors+
-        time.errors;
+        time.errors+projectTitles.errors+planning.errors+
+        taskProjects.errors;
     }catch(_){result.errors++;}
     await alfStoreAutoStatus(api,'graph',result);
     return result;

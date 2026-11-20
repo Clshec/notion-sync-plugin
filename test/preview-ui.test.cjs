@@ -2002,14 +2002,13 @@ test('manual habit-day preview and writeback refuse missing pagination cursor',a
 });
 
 
-test('plugin intro discloses three optional automations and never claims all syncing is manual',()=>{
-  assert.ok(html.includes('EXPERIMENTAL · AUTO SYNC OFF BY DEFAULT'));
-  assert.ok(html.includes('Three narrowly scoped automatic modes are available'));
-  assert.ok(html.includes('disabled by default'));
+test('plugin intro makes one-token core sync automatic and keeps legacy controls advanced',()=>{
+  assert.ok(html.includes('EXPERIMENTAL · CORE SYNC STARTS AFTER TOKEN CONNECTION'));
+  assert.ok(html.includes('Verified one-token connection enables core'));
+  assert.ok(html.includes('legacy habit/Pomodoro features'));
   assert.ok(!html.includes('No automatic sync, database creation or SuperSync modification.'));
-  assert.ok(html.includes('No Notion database, property or day-record creation'));
-  assert.ok(html.includes('separate device-local opt-in'),
-    'footer and intro both state narrowly scoped auto behavior');
+  assert.ok(html.includes('Notion databases and properties are never created by discovery'));
+  assert.ok(html.includes('Complete rich-text body sync and cross-device simultaneous writers are not yet accepted'));
   assert.match(manifest.version,/^0\.\d+\.\d+$/);
 });
 

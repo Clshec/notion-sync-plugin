@@ -47,12 +47,12 @@ code {font:inherit;white-space:nowrap}
 <header><span class="logo">ألف</span><div><h1>Alf Notion Super Productivity</h1><small>Notion plans · Super Productivity executes · Windows + Android</small></div></header>
 <section>
   <strong class="status" id="graphModeBadge">نسخة تجريبية — المزامنة التلقائية مغلقة</strong>
-  <p>Notion هو المكان الأساسي للتخطيط، وSuper Productivity للتنفيذ. ربط الحساب هنا لا يغيّر أي سجلات أو مهام.</p>
+  <p>Notion هو المكان الأساسي للتخطيط، وSuper Productivity للتنفيذ. بمجرد ربط التوكن بالقواعد المشتركة الصحيحة تبدأ مزامنة المهام الجديدة تلقائيًا؛ لا تُرحّل المهام القديمة دفعة واحدة.</p>
 </section>
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <section class="quick-start" aria-labelledby="quickTitle">
   <h2 id="quickTitle">اربط Notion بخطوة واحدة</h2>
-  <p>انسخ رمز الوصول من Notion والصقه هنا. ستكتشف ألف قواعد «اللوح» و«العادات» و«المستويات العليا والفرعية» والحقول والعلاقات تلقائيًا، دون كتابة معرفات أو أسماء أعمدة.</p>
+  <p>في Notion امنح التكامل الوصول إلى قواعد «اللوح» و«العادات» و«المستويات العليا والفرعية»، ثم الصق مفتاح API هنا. ستُكتشف القواعد والحقول تلقائيًا وتبدأ المزامنة بلا أي إعداد آخر.</p>
   <label>Notion Access Token
     <input id="quickToken" type="password" autocomplete="off" placeholder="الصق التوكن هنا (يُحفظ على هذا الجهاز فقط)">
   </label>
@@ -125,8 +125,8 @@ code {font:inherit;white-space:nowrap}
 <details id="advancedSettings" class="advanced">
 <summary>إعدادات متقدمة وتشخيص للمطورين فقط (اختياري)</summary>
 <section>
-  <strong class="status">EXPERIMENTAL · AUTO SYNC OFF BY DEFAULT</strong>
-  <p>Notion plans; Super Productivity executes. Preview and property-ID pinning are read-only against Notion. Manual task import, time, habit and partial observed-Pomodoro writebacks each require separate review and approval. Three narrowly scoped automatic modes are available <strong>only after explicit per-device opt-in</strong>: linked-task planning, positive tracked work time and approved existing habit-day values. All three are <strong>disabled by default</strong>; they are not full two-way sync. No Notion database, property or day-record creation and no changes to SuperSync settings.</p>
+  <strong class="status">EXPERIMENTAL · CORE SYNC STARTS AFTER TOKEN CONNECTION</strong>
+  <p>Notion plans; Super Productivity executes. Verified one-token connection enables core new-task/project sync and linked task planning/time on this device. These advanced controls are for diagnostics or separately scoped legacy habit/Pomodoro features, not steps ordinary users need to complete. Notion databases and properties are never created by discovery. Complete rich-text body sync and cross-device simultaneous writers are not yet accepted.</p>
 </section>
 <section>
   <h2>1. Connect your existing Notion data sources</h2>
@@ -419,6 +419,7 @@ code {font:inherit;white-space:nowrap}
   var GRAPH_AUTO_KEY='alf-auto-graph-local-enabled-v1';
   var GRAPH_CUTOVER_KEY='alf-auto-graph-cutover-v1';
   var GRAPH_AUTO_PARENT_KEY='alf-auto-graph-parent-v1';
+  var GRAPH_SP_PROJECT_BASELINE_KEY='alf-graph-sp-projects-at-connect-v1';
   var POMO_AUTO_KEY='alf-auto-pomo-log-local-enabled-v1';
   var AUTO_PLAN_ENABLED_KEY = 'alf-auto-plan-local-enabled-v1';
   var AUTO_PLAN_ANCHOR_PREFIX = 'alf-plan-anchor-v1-';
@@ -537,9 +538,21 @@ code {font:inherit;white-space:nowrap}
   }
   function alfQuickReady(config) {
     var profile=config && config.alfProfile;
-    return !!(profile && profile.name==='alf-life-os' &&
+    if(!(profile && profile.name==='alf-life-os' &&
       config.taskSource && config.habitSource &&
-      config.taskPropertyBindings && config.habitPropertyBindings);
+      profile.upperSource && profile.lowerSource &&
+      config.taskPropertyBindings && config.habitPropertyBindings))
+      return false;
+    for(var key of ['titleProp','typeProp','executionProp','estimateProp',
+      'actualProp','statusProp','projectProp','parentProp']){
+      var b=config.taskPropertyBindings[key];
+      if(!b||typeof b.id!=='string'||!b.id||
+         b.input!==config[key]||
+         String(b.sourceId||'').replace(/-/g,'').toLowerCase()!==
+           String(config.taskSource).replace(/-/g,'').toLowerCase())
+        return false;
+    }
+    return true;
   }
   function alfQuickMessage(error) {
     var hint=String(error && error.message || error || '');
@@ -591,6 +604,44 @@ code {font:inherit;white-space:nowrap}
       await alfUiDeleteSecret(key);
     }
   }
+  async function alfQuickStartVerifiedSync(){
+    // The one-token Connect action itself is the user's request to sync.
+    // Preserve a previous activation and its boundary on harmless reconnect.
+    // On a newly verified account, start with a current boundary: this must
+    // never send years of pre-existing tasks to Notion without review.
+    var raw=await alfUiGetSecret(GRAPH_CUTOVER_KEY);
+    var existing;
+    try{existing=raw?JSON.parse(raw):null;}catch(_){existing=null;}
+    if(!existing||existing.version!==1||
+       !Number.isSafeInteger(existing.sinceMs)||
+       existing.sinceMs<=0||existing.sinceMs>Date.now()+60000)
+      await alfUiSetSecret(GRAPH_CUTOVER_KEY,JSON.stringify({
+        version:1,sinceMs:Date.now()}));
+    // SP v20 Project.created is optional. Record the user's pre-existing
+    // native SP project IDs once to distinguish genuinely new projects
+    // without ever bulk-uploading the old project menu.
+    var cfg=JSON.parse(await PluginAPI.loadSyncedData(CFG_KEY));
+    var stored=await PluginAPI.loadSyncedData(GRAPH_SP_PROJECT_BASELINE_KEY);
+    var previous;
+    try{previous=stored?JSON.parse(stored):null;}catch(_){previous=null;}
+    var source=String(cfg.taskSource||'').replace(/-/g,'').toLowerCase();
+    if(!previous||previous.version!==1||previous.source!==source||
+       !Array.isArray(previous.ids)){
+      if(typeof PluginAPI.getAllProjects!=='function')
+        throw new Error('Native SP project inventory unavailable');
+      var projects=await PluginAPI.getAllProjects();
+      if(!Array.isArray(projects))
+        throw new Error('Cannot safely baseline existing SP projects');
+      await PluginAPI.persistDataSynced(JSON.stringify({version:1,
+        source:source,ids:projects.filter(function(p){
+          return p&&typeof p.id==='string'&&p.id!=='INBOX_PROJECT';
+        }).map(function(p){return p.id;}).sort()}),
+      GRAPH_SP_PROJECT_BASELINE_KEY);
+    }
+    await alfUiSetSecret(GRAPH_AUTO_KEY,'enabled');
+    // The graph engine owns tracked work time. Do not concurrently enable
+    // the older separate automatic-time engine or untested Pomodoro journal.
+  }
   async function alfQuickConnect() {
     if(active)return;
     busy(true);
@@ -624,8 +675,9 @@ code {font:inherit;white-space:nowrap}
       if(!alfQuickSameWorkBinding(existingMapping,discovery.config))
         await alfQuickDisableDeviceWriters();
       // Persist exactly one verified, automatically pinned mapping. No
-      // imported SP tasks, Notion pages, fields, or automatic flags are touched.
+      // manual source IDs or field mappings are required from end users.
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
+      await alfQuickStartVerifiedSync();
       putForm(discovery.config);
       lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;dailyHabitPreview=null;
       ui('authorizeCreateDailyCounters').checked=false;
@@ -642,8 +694,8 @@ code {font:inherit;white-space:nowrap}
       ui('quickPreviews').hidden=false;
       var graphRunning=await alfUiGetSecret(GRAPH_AUTO_KEY)==='enabled';
       showGraphMode(graphRunning);
-      ui('quickReport').textContent='تم الربط بنجاح: اللوح، قاعدة العادات، المستويات العليا والفرعية. تم التعرف على '+String(discovery.totalFields)+' حقلًا من المخطط الأصلي. القراءة متاحة. '+(graphRunning?'مزامنة المهام الجديدة مفعلة على هذا الجهاز.':'المزامنة التلقائية مغلقة.');
-      message('Alf zero-configuration profile verified and saved. No Notion/SP records were changed.');
+      ui('quickReport').textContent='تم الربط والمزامنة التلقائية: اللوح، قاعدة العادات، المستويات العليا والفرعية. تم اكتشاف '+String(discovery.totalFields)+' حقلًا وربطها دون إعدادات يدوية. تُزامن المهام الجديدة أثناء تشغيل التطبيق.';
+      message('Connected securely. Automatic sync is enabled on this device; no bulk historical import was requested.');
     }catch(e) {
       ui('quickPreviews').hidden=true;
       ui('quickReport').textContent=alfQuickMessage(e);
@@ -3169,6 +3221,14 @@ code {font:inherit;white-space:nowrap}
 
   async function init() {
     try {
+      // The default user-facing screen is intentionally just the token and
+      // connection status. Detailed mapping/review/manual tooling remains
+      // available to developers inside the collapsed diagnostics section.
+      var advanced=ui('advancedSettings');
+      if(advanced&&typeof advanced.appendChild==='function'){
+        advanced.appendChild(ui('quickPreviews'));
+        advanced.appendChild(ui('graphSyncSection'));
+      }
       var saved=await PluginAPI.loadSyncedData(CFG_KEY);
       if (saved) {
         var c=JSON.parse(saved);
