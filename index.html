@@ -543,14 +543,26 @@ code {font:inherit;white-space:nowrap}
       profile.upperSource && profile.lowerSource &&
       config.taskPropertyBindings && config.habitPropertyBindings))
       return false;
-    for(var key of ['titleProp','typeProp','executionProp','estimateProp',
-      'actualProp','statusProp','projectProp','parentProp']){
-      var b=config.taskPropertyBindings[key];
-      if(!b||typeof b.id!=='string'||!b.id||
-         b.input!==config[key]||
-         String(b.sourceId||'').replace(/-/g,'').toLowerCase()!==
-           String(config.taskSource).replace(/-/g,'').toLowerCase())
-        return false;
+    // Validate all 13 original pins, not only work-task pins. An incomplete
+    // habit schema must not look like a successful zero-configuration setup.
+    var groups=[
+      [config.taskPropertyBindings,config.taskSource,
+        ['titleProp','typeProp','executionProp','estimateProp',
+         'actualProp','statusProp','projectProp','parentProp']],
+      [config.habitPropertyBindings.definitions,config.habitSource,
+        ['habitTitleProp','habitCadenceProp']],
+      [config.habitPropertyBindings.occurrences,config.taskSource,
+        ['habitOccTypeProp','habitOccRelationProp','habitOccDayProp']]
+    ];
+    for(var group of groups){
+      for(var key of group[2]){
+        var b=group[0]&&group[0][key];
+        if(!b||typeof b.id!=='string'||!b.id||
+           b.input!==config[key]||
+           String(b.sourceId||'').replace(/-/g,'').toLowerCase()!==
+             String(group[1]).replace(/-/g,'').toLowerCase())
+          return false;
+      }
     }
     return true;
   }
@@ -586,16 +598,28 @@ code {font:inherit;white-space:nowrap}
     for(var key of ['upperSource','lowerSource']){
       if(!sameId(a.alfProfile[key],b.alfProfile[key]))return false;
     }
-    if(a.unit!==b.unit||a.typeValues!==b.typeValues)return false;
-    var keys=new Set([...Object.keys(a.taskPropertyBindings||{}),
-      ...Object.keys(b.taskPropertyBindings||{})]);
-    for(var key of keys){
-      var left=a.taskPropertyBindings?.[key],right=b.taskPropertyBindings?.[key];
-      if(!left||!right||left.id!==right.id||
-         !sameId(left.sourceId,right.sourceId)||left.input!==right.input)
-        return false;
+    for(var setting of ['unit','typeValues','bundleValues',
+      'completedValues','habitOccTypeValue','habitDoneStatusValue']){
+      if(a[setting]!==b[setting])return false;
     }
-    return keys.size>=8;
+    function samePins(left,right,minimum){
+      if(!left||!right)return false;
+      var keys=Object.keys(left);
+      if(keys.length<minimum||keys.length!==Object.keys(right).length)
+        return false;
+      for(var key of keys){
+        var l=left[key],r=right[key];
+        if(!l||!r||l.id!==r.id||
+           !sameId(l.sourceId,r.sourceId)||l.input!==r.input)
+          return false;
+      }
+      return true;
+    }
+    return samePins(a.taskPropertyBindings,b.taskPropertyBindings,8)&&
+      samePins(a.habitPropertyBindings?.definitions,
+        b.habitPropertyBindings?.definitions,2)&&
+      samePins(a.habitPropertyBindings?.occurrences,
+        b.habitPropertyBindings?.occurrences,3);
   }
   async function alfQuickDisableDeviceWriters(){
     for(var key of [AUTO_PLAN_ENABLED_KEY,AUTO_TIME_ENABLED_KEY,
@@ -604,7 +628,7 @@ code {font:inherit;white-space:nowrap}
       await alfUiDeleteSecret(key);
     }
   }
-  async function alfQuickStartVerifiedSync(){
+  async function alfQuickStartVerifiedSync(resetProjectBaseline){
     // The one-token Connect action itself is the user's request to sync.
     // Preserve a previous activation and its boundary on harmless reconnect.
     // On a newly verified account, start with a current boundary: this must
@@ -625,7 +649,8 @@ code {font:inherit;white-space:nowrap}
     var previous;
     try{previous=stored?JSON.parse(stored):null;}catch(_){previous=null;}
     var source=String(cfg.taskSource||'').replace(/-/g,'').toLowerCase();
-    if(!previous||previous.version!==1||previous.source!==source||
+    if(resetProjectBaseline||!previous||previous.version!==1||
+       previous.source!==source||
        !Array.isArray(previous.ids)){
       if(typeof PluginAPI.getAllProjects!=='function')
         throw new Error('Native SP project inventory unavailable');
@@ -672,12 +697,17 @@ code {font:inherit;white-space:nowrap}
       // Verification of the same Notion connection is read-only. Revoking
       // its existing writer on every press made tasks seem to stop syncing.
       // Revoke only on a changed source/schema identity or token rotation.
-      if(!alfQuickSameWorkBinding(existingMapping,discovery.config))
+      var workBindingChanged=!alfQuickSameWorkBinding(
+        existingMapping,discovery.config);
+      if(workBindingChanged)
         await alfQuickDisableDeviceWriters();
       // Persist exactly one verified, automatically pinned mapping. No
       // manual source IDs or field mappings are required from end users.
       await PluginAPI.persistDataSynced(JSON.stringify(discovery.config),CFG_KEY);
-      await alfQuickStartVerifiedSync();
+      // A changed credential or any changed original pin defines a new
+      // authorization boundary, even when the board source ID is unchanged.
+      // Snapshot CURRENT native projects again to prevent backlog export.
+      await alfQuickStartVerifiedSync(credentialChanged||workBindingChanged);
       putForm(discovery.config);
       lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;dailyHabitPreview=null;
       ui('authorizeCreateDailyCounters').checked=false;

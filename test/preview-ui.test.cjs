@@ -21,6 +21,12 @@ test('reconnecting the same Alf Notion sources preserves device writer authoriza
     projectSource:uuid('3'),unit:'hours',typeValues:'مهمة, حزمة',
     alfProfile:{name:'alf-life-os',upperSource:uuid('4'),
       lowerSource:uuid('3')},
+    habitPropertyBindings:{
+      definitions:{habitTitleProp:{id:'ht',sourceId:uuid('2'),input:'habit'},
+        habitCadenceProp:{id:'hc',sourceId:uuid('2'),input:'cadence'}},
+      occurrences:{habitOccTypeProp:{id:'hot',sourceId:uuid('1'),input:'type'},
+        habitOccRelationProp:{id:'hor',sourceId:uuid('1'),input:'relation'},
+        habitOccDayProp:{id:'hod',sourceId:uuid('1'),input:'day'}}},
     taskPropertyBindings:Object.fromEntries(
       Array.from({length:8},(_,i)=>['f'+i,{
         id:'id'+i,sourceId:uuid('1'),input:'field'+i}]))
@@ -32,10 +38,16 @@ test('reconnecting the same Alf Notion sources preserves device writer authoriza
   assert.equal(same(cfg,{...cfg,taskPropertyBindings:{
     ...cfg.taskPropertyBindings,f0:{...cfg.taskPropertyBindings.f0,id:'other'}
   }}),false);
+  assert.equal(same(cfg,{...cfg,habitPropertyBindings:{
+    ...cfg.habitPropertyBindings,occurrences:{
+      ...cfg.habitPropertyBindings.occurrences,
+      habitOccDayProp:{...cfg.habitPropertyBindings.occurrences.habitOccDayProp,
+        id:'changed-day-id'}}}}),false,
+    'changed daily-habit pin revokes previous writer authorization');
   const body=html.slice(html.indexOf('async function alfQuickConnect()'),
     html.indexOf('function dataSourceId(value'));
   assert.match(body,/if\(credentialChanged\)\{\s*await alfQuickDisableDeviceWriters\(\)/);
-  assert.match(body,/if\(!alfQuickSameWorkBinding\(existingMapping,discovery\.config\)\)\s*await alfQuickDisableDeviceWriters\(\)/);
+  assert.match(body,/var workBindingChanged=!alfQuickSameWorkBinding\(\s*existingMapping,discovery\.config\);\s*if\(workBindingChanged\)\s*await alfQuickDisableDeviceWriters\(\)/);
 });
 
 function mount(customRows, habitRows, taskPages, initialConfig) {

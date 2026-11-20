@@ -1,4 +1,6 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.1 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.2 experimental)
+
+**v0.40.2 authorization safety:** In synthetic tests, incomplete or altered habit/day original property pins must prevent the one-token connection from enabling an automatic writer. A same-token, same-field reconnect retains the native SP project baseline and activation timestamp. Changing credentials or any pinned source/field requires a new activation boundary and a fresh snapshot of **all currently existing** native SP project IDs, including projects created after the previous connection. Do not rotate the actual user's live Notion token for this test. Live Windows acceptance and a self-hosted Woodpecker CI run are still outstanding.
 
 **v0.40.1 stale-read acceptance:** If a user edits the same Notion project or task twice while a local scan is in progress, the second live value must NEVER be overwritten in native SP by the stale first scan. All Notion → SP changes now re-fetch the exact original page before an SP write and verify current title, mapped task/parent relations and schema classifications. Unit tests cover a newer title and a project move superseding the first scan; real multi-device race tests are NOT complete. Do not authorize Android as a second independent writer.
 

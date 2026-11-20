@@ -16,15 +16,22 @@ function validProfile(){
   const uuid=x=>x.repeat(32),board=uuid('1');
   const fields=['titleProp','typeProp','executionProp',
     'estimateProp','actualProp','statusProp','projectProp','parentProp'];
+  const habitFields=['habitTitleProp','habitCadenceProp'];
+  const occurrenceFields=['habitOccTypeProp','habitOccRelationProp',
+    'habitOccDayProp'];
+  const pin=(keys,source,prefix)=>Object.fromEntries(keys.map((key,i)=>[
+    key,{sourceId:source,input:'existing-'+key,id:prefix+'-pin-'+i}]));
   return {
     version:2,taskSource:board,habitSource:uuid('2'),
     projectSource:uuid('3'),
     alfProfile:{name:'alf-life-os',upperSource:uuid('4'),
       lowerSource:uuid('3')},
-    habitPropertyBindings:{definitions:{},occurrences:{}},
-    taskPropertyBindings:Object.fromEntries(fields.map((key,i)=>[
-      key,{sourceId:board,input:'existing-'+key,id:'pin-'+i}])),
-    ...Object.fromEntries(fields.map(key=>[key,'existing-'+key]))
+    habitPropertyBindings:{
+      definitions:pin(habitFields,uuid('2'),'habit'),
+      occurrences:pin(occurrenceFields,board,'day')},
+    taskPropertyBindings:pin(fields,board,'task'),
+    ...Object.fromEntries([...fields,...habitFields,...occurrenceFields]
+      .map(key=>[key,'existing-'+key]))
   };
 }
 test('end-user connection validates original shared sources and pinned fields without manual IDs',()=>{
@@ -35,6 +42,14 @@ test('end-user connection validates original shared sources and pinned fields wi
   assert.equal(ready({...c,taskPropertyBindings:{
     ...c.taskPropertyBindings,actualProp:{...c.taskPropertyBindings.actualProp,
       sourceId:'unrelated-source'}}}),false);
+  assert.equal(ready({...c,habitPropertyBindings:{
+    ...c.habitPropertyBindings,definitions:{}}}),false,
+  'missing habit pins must not enable synchronization');
+  assert.equal(ready({...c,habitPropertyBindings:{
+    ...c.habitPropertyBindings,occurrences:{
+      ...c.habitPropertyBindings.occurrences,habitOccDayProp:{
+        ...c.habitPropertyBindings.occurrences.habitOccDayProp,
+        sourceId:'unrelated-source'}}}}),false);
 });
 test('one-token connection automatically enables a device writer exactly once',async()=>{
   const saved=new Map(),secretWrites=[];
@@ -67,10 +82,20 @@ test('one-token connection automatically enables a device writer exactly once',a
     'reconnection cannot reset the no-mass-import boundary');
   const projects=JSON.parse(metadata.get('alf-graph-sp-projects-at-connect-v1'));
   assert.deepEqual(projects.ids,['old-sp-project']);
+  // A harmless reconnect must preserve the same boundary. But a credential
+  // rotation to the SAME Notion source must re-snapshot current native SP
+  // projects, otherwise old projects can be exported as new.
+  let currentProjects=[{id:'old-sp-project',title:'Old project'},
+    {id:'created-before-rotation',title:'Existing now'}];
+  context.PluginAPI.getAllProjects=async()=>currentProjects;
+  await start(true);
+  const refreshed=JSON.parse(metadata.get('alf-graph-sp-projects-at-connect-v1'));
+  assert.deepEqual(refreshed.ids,
+    ['created-before-rotation','old-sp-project']);
   const connect=html.slice(html.indexOf('async function alfQuickConnect()'),
     html.indexOf('function dataSourceId(value'));
   assert.match(connect,
-    /await PluginAPI\.persistDataSynced\(JSON\.stringify\(discovery\.config\),CFG_KEY\);\s*await alfQuickStartVerifiedSync\(\)/);
+    /await PluginAPI\.persistDataSynced\(JSON\.stringify\(discovery\.config\),CFG_KEY\);[\s\S]*?await alfQuickStartVerifiedSync\(credentialChanged\|\|workBindingChanged\)/);
 });
 test('technical selectors are behind collapsed developer diagnostics',()=>{
   assert.match(html,/<details id="advancedSettings" class="advanced">/);
