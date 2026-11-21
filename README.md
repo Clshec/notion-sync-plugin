@@ -1,5 +1,15 @@
 # Alf Notion Super Productivity
 
+### v0.40.3 — original daily rows with both «عادة» and «مهمة» (DRAFT)
+
+**Zero-AI runtime:** The integration itself remains deterministic and local: once the user has granted the original Notion sources and entered one Notion integration token, no AI agent, separate web service, manual task registration or per-day intervention is required for the supported task/project graph.
+
+**Root cause reproduced with a real read-only Notion row on 2026-11-21:** «الحمد» is one original dated board row per day, classified as both `عادة` and `مهمة`, and today is `In progress`. v0.40.2's graph parser incorrectly rejected *any* row containing `عادة`, even when it was also a real `مهمة`. Now only *pure* habit rows are excluded from the task graph. The dual-role row keeps its original page ID for the task link, and its original dated habit occurrence remains available to the independent habit reconciler.
+
+**Daily recurrence identity:** When looking for a possible pre-existing SP task, the graph no longer treats a same-title task on a *different explicit due day* as a collision. An identical or unknown day remains an ambiguous collision and blocks unattended duplication. `alfGraphApplyLocal` passes the original `يوم التنفيذ` value into the native SP `addTask({dueDay})` field, which schedules the task in Today for its logical day. Each real Notion-generated daily page has its own page ID; this is not equivalent to copying or controlling Notion's repeat-template rule inside SP. Task-only, mixed task+habit, pure-habit and same-day-duplicate cases now have dedicated regression tests.
+
+**Validation/status:** Browser-independent in-memory mocked graph tests pass for the dual-type extraction, Today due date, yesterday/today title separation, idempotent replay and same-day conflict. Added Node regression cases in `test/graph-sync-v036.test.cjs`; the complete Node suite, self-hosted Woodpecker gate and live primary-Windows host acceptance of **v0.40.3** have **not** been run because the Windows device bridge is currently disconnected. v0.40.3 is on the draft PR and **is not yet installed on the user's primary SP profile**. Durable native automatic habit-counter creation and historical full backfill remain separate unfinished work; do not claim those are solved by this task hotfix.
+
 ### v0.40.2 — complete pin verification and safe account-rotation rebaseline (DRAFT)
 
 The one-token connection now validates **all 13 original pinned fields**, including habit definitions and daily habit occurrences, before it can enable the local core writer. The same-connection check also compares habit pin identities: changing a daily habit field or an original workflow option revokes old writer authorization instead of treating the connection as unchanged.
