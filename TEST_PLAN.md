@@ -1,4 +1,14 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.2 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.5 experimental)
+
+## v0.40.5 — zero-setup original daily Habits acceptance
+
+1. Existing \`v0.40.4\` linked profile upgrades to \`v0.40.5\` **without** re-entering its Notion token, doing manual import or approving individual habits. A new profile only supplies a Notion token once after granting the original existing sources. The local graph flag automatically enables the new daily mirror.
+2. For the device-local day, fetch only original \`اللوح\` rows with \`نوع الصفحة\` containing \`عادة\` and exact \`يوم التنفيذ\`. A second \`مهمة\` kind (such as \`الحمد\`) is preserved as a distinct facet, not auto-completed by a habit counter. No \`قاعدة العادات\` definition is treated as an independently executable daily row.
+3. The plugin's visible \`عادات اليوم\` cards must automatically list **all** uniquely valid original daily entries without a preview/import/approval button; existing native counters are matched by unambiguous title, and unmatched entries are still usable inside the plugin. The built-in native Habits page must **not** show fake counters or private storage modifications.
+4. For a previously linked native ClickCounter, changing its actual daily count across the target goal synchronizes its original *single-role* Notion day Status to \`Done\` after exact GET preflight. Native StopWatch time and initial preconnection positive counts must not be interpreted as a fresh binary completion. Do not overwrite a manual Notion Status change or a \`عادة + مهمة\` record.
+5. A \`Done\` original day may hydrate an already-present, uniquely verified zero ClickCounter with a binary goal; never call \`setCounter\` to create an unknown native counter. Completion buttons inside the plugin act on exact unambiguous daily records, with no extra setup consent and no Notion database creation.
+6. Verify account/token rotation cannot show cached source records from another source, midnight rollover updates the original day, ambiguous duplicate day/definition records are flagged, and no repeated native/Notion write occurs during no-change polling. Test the same Windows profile after Super Productivity restart; Android and multi-device concurrent writers remain separate acceptance gates.
+7. Require full native Node suite, Woodpecker when available, installed SP Plugin panel check, and Notion read-only after update. **Native creation of absent built-in Habits counters remains blocked upstream**, not solved by this plugin UI fallback.
 
 ## v0.40.4 — zero-AI, resumable historical Notion backfill acceptance
 

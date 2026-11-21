@@ -6,7 +6,7 @@ const vm=require('node:vm');
 const path=require('node:path');
 const code=fs.readFileSync(path.join(__dirname,'..','plugin.js'),'utf8');
 
-test('SP onReady registers four opt-in background engines and unload clears all their timers',async()=>{
+test('SP onReady registers five automatic engines and unload clears all their timers',async()=>{
   let ready=null,unload=null,n=0;
   const timers=new Map(),hooks=new Map(),notionRequests=[],localWrites=[],syncWrites=[];
   const secrets=new Map(); // all opt-in flags absent by default
@@ -39,9 +39,9 @@ test('SP onReady registers four opt-in background engines and unload clears all 
   assert.equal(timers.size,0,'start only after SP signals readiness');
   await ready();
   await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(timers.size,4,'planning, work time, habit day and project/task graph each register timer');
+  assert.equal(timers.size,5,'planning, work time, reviewed habit day, board habit mirror and graph each register a timer');
   assert.deepEqual([...timers.values()].map(v=>v.ms).sort((a,b)=>a-b),
-    [5000,60000,60000,60000]);
+    [5000,5000,60000,60000,60000]);
   assert.equal(notionRequests.length,0,'disabled engines must not access Notion');
   assert.equal(localWrites.length,0,'disabled engines must not update local diagnostics');
   assert.equal(syncWrites.length,0,'disabled engines must not alter SuperSync metadata');

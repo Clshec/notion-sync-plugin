@@ -78,6 +78,12 @@ code {font:inherit;white-space:nowrap}
     <p class="muted"><small>إنشاء عداد عبر واجهة إضافات SP 20 لا يُحفظ بعد إعادة التشغيل بسبب خطأ في مسار setCounter. العادات الجديدة تُنشأ حاليًا من شاشة Habits الأصلية، وستتعرف الإضافة عليها بالاسم الفريد دون إنشاء نسخة ثانية. لن نعتمد إنشاءً مؤقتًا على أنه مزامنة ناجحة.</small></p>
     <p class="muted"><small>العادات المطلوب تنفيذها تأتي فقط من سجلات «عادة» في اللوح بتاريخ يوم Super Productivity. «قاعدة العادات» مرجع للتعريف فقط. هذه معاينة لا تُنشئ عدادات أو تغيّر بيانات.</small></p>
   </div>
+  <section id="alfAutomaticHabits" class="quick-start" hidden>
+    <h2>عادات اليوم — مزامنة تلقائية من اللوح</h2>
+    <p id="alfAutomaticHabitsStatus" role="status" aria-live="polite" class="muted">تُقرأ عادات اليوم تلقائيًا بعد ربط Notion، بدون استيراد أو موافقات إضافية.</p>
+    <div id="alfAutomaticHabitCards" class="grid"></div>
+    <p class="muted"><small>العداد الموجود في Habits يُستخدم مباشرة عندما تكون المطابقة فريدة. العادات التي لا يتيح Super Productivity 20 إنشاء عداد دائم لها تظهر هنا ويمكن إنجازها من نفس الإضافة؛ لا تُنشأ عدادات مؤقتة أو قواعد Notion جديدة.</small></p>
+  </section>
   <div id="graphSyncSection" hidden>
     <h3>ربط المشاريع الصغيرة والحزم والمهام</h3>
     <p class="muted">معاينة شاملة من «المستويات العليا/الفرعية» و«اللوح». المشاريع التي تتبع مجلدات أو كورسات لا تدخل في مهام SP. الحزمة تصبح مهمة رئيسية وأبناؤها Subtasks. لا إنشاء أو تعديل تلقائي قبل نجاح الاختبارات.</p>
@@ -667,6 +673,104 @@ code {font:inherit;white-space:nowrap}
     // The graph engine owns tracked work time. Do not concurrently enable
     // the older separate automatic-time engine or untested Pomodoro journal.
   }
+  var alfAutomaticHabitCache='';
+  async function alfRenderAutomaticHabits(force){
+    var section=ui('alfAutomaticHabits');
+    try{
+      if(await alfUiGetSecret(GRAPH_AUTO_KEY)!=='enabled'){
+        section.hidden=true;alfAutomaticHabitCache='';return;
+      }
+      section.hidden=false;
+      if(typeof PluginAPI.getDayContext!=='function')
+        throw new Error('Today is not available in Super Productivity');
+      var dayContext=await PluginAPI.getDayContext();
+      var day=dayContext&&dayContext.todayStr;
+      var raw=await PluginAPI.loadSyncedData('alf-board-habits-today-v1');
+      if(!raw){
+        ui('alfAutomaticHabitCards').replaceChildren();
+        ui('alfAutomaticHabitsStatus').textContent='جاري جمع عادات اليوم من اللوح تلقائيًا…';
+        return;
+      }
+      var snapshot=JSON.parse(raw);
+      var currentBoard=String(getForm().taskSource||'').replace(/-/g,'').toLowerCase();
+      if(!snapshot||snapshot.version!==1||snapshot.day!==day||
+         snapshot.board!==currentBoard||
+         !Array.isArray(snapshot.rows)||snapshot.rows.length>300){
+        ui('alfAutomaticHabitCards').replaceChildren();
+        alfAutomaticHabitCache='';
+        ui('alfAutomaticHabitsStatus').textContent='جاري تحديث عادات اليوم من اللوح…';
+        return;
+      }
+      if(!force&&raw===alfAutomaticHabitCache)return;
+      alfAutomaticHabitCache=raw;
+      var cards=ui('alfAutomaticHabitCards');
+      cards.replaceChildren();
+      var linked=0,missing=0,conflicts=0;
+      for(var item of snapshot.rows){
+        if(!item||typeof item.title!=='string'||!item.id)continue;
+        if(item.ambiguous)conflicts++;
+        else if(item.counterId)linked++;
+        else missing++;
+        var card=document.createElement('div');
+        card.style.cssText='border:1px solid #8885;border-radius:10px;padding:12px;min-width:0';
+        var heading=document.createElement('strong');
+        heading.textContent=item.title;
+        card.appendChild(heading);
+        var status=document.createElement('p');
+        status.className='muted';
+        status.textContent=(item.status==='Done'?'مكتملة':
+          item.status==='In progress'?'جارية':'لم تكتمل')+' · '+
+          (item.ambiguous?'تعارض في الربط':
+           item.counterId?'مرتبطة بعداد Habits':
+           'متاحة هنا دون عداد أصلي')+
+          (item.counterId?' · '+item.count+'/'+item.goal:'')+
+          (item.stateConflict?' · تعارض قديم: لم تُستبدل حالة Notion':'');
+        card.appendChild(status);
+        if(item.status!=='Done'&&!item.ambiguous&&!item.mixedTask&&
+           ['Not started','In progress','Planned'].includes(item.status)){
+          var button=document.createElement('button');
+          button.textContent='تسجيل إنجاز العادة';
+          button.className='primary';
+          (function(row,b,display){
+            b.addEventListener('click',async function(){
+              b.disabled=true;
+              b.textContent='جاري تسجيل الإنجاز…';
+              try{
+                await alfHostRpc('completeDailyHabit',{
+                  pageId:row.id,definitionId:row.definitionId,
+                  title:row.title,day:row.day,
+                  expectedStatus:row.status
+                });
+                b.textContent='تم الإنجاز في اللوح';
+                display.textContent='مكتملة · محفوظة في Notion';
+                // The running auto engine refreshes the native counter and
+                // the shared snapshot. No separate import/setup step.
+              }catch(e){
+                b.disabled=false;
+                b.textContent='إعادة محاولة تسجيل الإنجاز';
+                display.textContent='لم يتم تأكيد الإنجاز؛ افحص حالة العادة في Notion.';
+              }
+            });
+          })(item,button,status);
+          card.appendChild(button);
+        }else if(item.mixedTask&&item.status!=='Done'){
+          var note=document.createElement('small');
+          note.textContent='هذه عادة ومهمة معًا؛ أكمل المهمة الأصلية من Today.';
+          card.appendChild(note);
+        }
+        cards.appendChild(card);
+      }
+      ui('alfAutomaticHabitsStatus').textContent='يوم '+day+': '+
+        snapshot.rows.length+' عادات من اللوح، '+linked+
+        ' مرتبطة بعدادات Habits الأصلية، '+missing+
+        ' متاحة في الإضافة'+(conflicts?', '+conflicts+' تحتاج حل تعارض':'')+
+        '. يعمل الاستيراد وعرض التغييرات تلقائيًا.';
+    }catch(_){
+      section.hidden=false;
+      ui('alfAutomaticHabitsStatus').textContent=
+        'تعذر تحديث عادات اليوم الآن. ستعيد الإضافة المحاولة تلقائيًا دون تغيير بياناتك.';
+    }
+  }
   async function alfQuickConnect() {
     if(active)return;
     busy(true);
@@ -708,7 +812,9 @@ code {font:inherit;white-space:nowrap}
       // authorization boundary, even when the board source ID is unchanged.
       // Snapshot CURRENT native projects again to prevent backlog export.
       await alfQuickStartVerifiedSync(credentialChanged||workBindingChanged);
+      alfAutomaticHabitCache='';
       putForm(discovery.config);
+      void alfRenderAutomaticHabits(true);
       lastPreviewConfig=null;lastVisibleRows=[];habitPreview=null;dailyHabitPreview=null;
       ui('authorizeCreateDailyCounters').checked=false;
       ui('dailyHabitRows').replaceChildren();ui('dailyHabitsSection').hidden=true;
@@ -3271,6 +3377,8 @@ code {font:inherit;white-space:nowrap}
       var habitsEnabled=await alfUiGetSecret(AUTO_HABIT_ENABLED_KEY);
       var graphEnabled=await alfUiGetSecret(GRAPH_AUTO_KEY);
       showGraphMode(graphEnabled==='enabled');
+      await alfRenderAutomaticHabits(true);
+      setInterval(function(){void alfRenderAutomaticHabits(false);},5000);
       if (local && alfQuickReady(getForm())) {
         ui('quickPreviews').hidden=false;
         ui('quickReport').textContent='تم حفظ ربط نظام ألف سابقًا. اضغط اتصال لإعادة التحقق من قواعد Notion؛ '+(graphEnabled==='enabled'?'مزامنة المهام الجديدة مفعّلة على هذا الجهاز.':'المزامنة التلقائية مغلقة.');

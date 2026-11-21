@@ -430,6 +430,8 @@ function alfCreateHostRpcHandler(api, doc) {
         }finally{
           inflightCounters.delete(target);
         }
+      } else if(req.op==='completeDailyHabit'){
+        value=await alfCompleteBoardHabit(api,args);
       } else if (req.op === 'graphPreview') {
         if(Object.keys(args).length)throw new Error('Unsupported graph preview arguments');
         const inventory=await alfGraphInventory(api);
@@ -2162,6 +2164,7 @@ const ALF_GRAPH_AUTO_KEY='alf-auto-graph-local-enabled-v1';
 const ALF_GRAPH_CUTOVER_KEY='alf-auto-graph-cutover-v1';
 const ALF_GRAPH_AUTO_PARENT_KEY='alf-auto-graph-parent-v1';
 const ALF_POMO_AUTO_KEY='alf-auto-pomo-log-local-enabled-v1';
+const ALF_NATIVE_HABITS_SNAPSHOT_KEY='alf-board-habits-today-v1';
 function alfGraphSpId(id){
   if(typeof id!=='string'||!id||id.length>120||/\s/.test(id))
     throw new Error('Invalid SP entity identity');
@@ -3246,10 +3249,280 @@ function alfCreateAutoGraphSync(api,options={}){
   return {runOnce,start,stop,heartbeat};
 }
 
+// A portable, zero-setup mirror for the ORIGINAL daily board records.
+// SP 20's native SimpleCounter creation is nonpersistent (upsert without an
+// operation log). Never forge a counter or pretend the native Habits list was
+// populated. Missing rows are nevertheless available in this plugin's own
+// SP side panel without requiring a second import/setup action.
+const ALF_BOARD_HABIT_ANCHOR_PREFIX='alf-board-habit-anchor-v1-';
+function alfBoardHabitRecord(page,c,day){
+  const board=alfGraphId(c.taskSource);
+  const bindings=c.habitPropertyBindings&&c.habitPropertyBindings.occurrences;
+  const title=alfGraphField(page,c,'titleProp');
+  const kinds=alfGraphField(page,c,'typeProp');
+  const date=alfGraphField(page,c,'executionProp');
+  const status=alfGraphField(page,c,'statusProp');
+  const relation=bindings&&alfHostPinnedPageProperty(page,
+    bindings.habitOccRelationProp,board);
+  if(!title||title.type!=='title'||!kinds||kinds.type!=='multi_select'||
+     !date||date.type!=='date'||!status||status.type!=='status'||
+     page.parent&&page.parent.data_source_id&&
+       alfGraphId(page.parent.data_source_id)!==board)return null;
+  const types=(kinds.multi_select||[]).map(x=>x.name);
+  if(!types.includes('عادة')||!date.date||date.date.start!==day||
+     date.date.end)return null;
+  const id=alfGraphId(page.id);
+  const text=(title.title||[]).map(x=>x.plain_text||
+    x.text&&x.text.content||'').join('').trim();
+  const definitions=relation&&relation.type==='relation'?
+    (relation.relation||[]).map(x=>alfGraphId(x.id)).filter(Boolean):[];
+  const value=status.status&&status.status.name;
+  if(!id||!text||text.length>250||
+     !['Not started','In progress','Done','Planned',
+       'cancelled'].includes(value))return null;
+  return {id,title:text,day,definitionId:definitions.length===1?
+    definitions[0]:null,missingRelation:definitions.length!==1,status:value,
+    mixedTask:types.some(type=>type!=='عادة')};
+}
+function alfBoardHabitCandidates(rows,counters){
+  const names=new Map(),rowNames=new Map(),defs=new Map();
+  for(const counter of counters){
+    if(!counter||!counter.id||!counter.title)continue;
+    const key=alfGraphName(counter.title);
+    if(!names.has(key))names.set(key,[]);
+    names.get(key).push(counter);
+  }
+  for(const row of rows){
+    const key=alfGraphName(row.title);
+    rowNames.set(key,(rowNames.get(key)||0)+1);
+    defs.set(row.definitionId,(defs.get(row.definitionId)||0)+1);
+  }
+  return rows.map(row=>{
+    const matching=names.get(alfGraphName(row.title))||[];
+    const ambiguous=row.missingRelation||
+      rowNames.get(alfGraphName(row.title))!==1||
+      defs.get(row.definitionId)!==1||matching.length>1;
+    const counter=!ambiguous&&matching.length===1&&
+      matching[0].isEnabled!==false?matching[0]:null;
+    const value=counter&&counter.countOnDay&&counter.countOnDay[row.day];
+    return {...row,ambiguous,counterId:counter&&counter.id||null,
+      counterType:counter&&counter.type||null,
+      count:Number.isFinite(value)&&value>=0?value:0,
+      goal:counter&&Number.isFinite(counter.streakMinValue)&&
+        counter.streakMinValue>0?counter.streakMinValue:1};
+  });
+}
+function alfCreateBoardHabitsSync(api,options={}){
+  const intervalMs=options.intervalMs||8000;
+  const load=options.load||alfGraphAll;
+  let timer=null,previous=0,inflight=false,activeDay='';
+  async function runOnce(){
+    const result={enabled:false,day:null,processed:0,matched:0,missing:0,
+      conflicts:0,written:0,errors:0};
+    if(typeof api.getSecret!=='function'||
+       await api.getSecret(ALF_GRAPH_AUTO_KEY)!=='enabled')return result;
+    result.enabled=true;
+    try{
+      const raw=await api.loadSyncedData('alf-mapping-v2');
+      const c=alfGraphSourceConfig(raw).c;
+      const board=alfGraphId(c.taskSource);
+      const occ=c.habitPropertyBindings&&c.habitPropertyBindings.occurrences;
+      if(!occ||!['habitOccTypeProp','habitOccDayProp',
+        'habitOccRelationProp'].every(k=>occ[k]&&
+          alfGraphId(occ[k].sourceId)===board&&occ[k].id))
+        throw new Error('Original daily board habit pins missing');
+      const ctx=await api.getDayContext();
+      const day=ctx&&ctx.todayStr;
+      if(typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day))
+        throw new Error('SP local day unavailable');
+      const token=await api.getSecret('alf-notion-token');
+      if(!token)throw new Error('Notion token unavailable');
+      const schema=await alfGraphRequest(api,token,'/data_sources/'+board);
+      for(const [name,type] of [['habitOccTypeProp','multi_select'],
+        ['habitOccDayProp','date'],['habitOccRelationProp','relation']]){
+        const pinned=alfAutoProp(schema&&schema.properties||{},occ[name].id);
+        if(!pinned||pinned.type!==type)
+          throw new Error('Notion original habit pin changed');
+      }
+      const filter={and:[
+        {property:occ.habitOccTypeProp.id,multi_select:{contains:'عادة'}},
+        {property:occ.habitOccDayProp.id,date:{equals:day}}
+      ]};
+      const pages=await load(api,token,board,filter,300);
+      if(!Array.isArray(pages)||pages.length>300)
+        throw new Error('Unbounded original habit inventory');
+      const counters=await api.getAllSimpleCounters();
+      if(!Array.isArray(counters))
+        throw new Error('Native SP Habits reader unavailable');
+      const records=[];
+      for(const page of pages){
+        if(page.in_trash)continue;
+        const row=alfBoardHabitRecord(page,c,day);
+        if(row)records.push(row);
+        else result.conflicts++;
+      }
+      const ids=new Set();
+      if(records.some(row=>ids.has(row.id)||!ids.add(row.id)))
+        throw new Error('Duplicate Notion daily habit record ID');
+      const resolved=alfBoardHabitCandidates(records,counters);
+      result.day=day;result.processed=resolved.length;
+      for(const row of resolved){
+        if(row.ambiguous){result.conflicts++;continue;}
+        if(!row.counterId){result.missing++;continue;}
+        result.matched++;
+        // Native SP updates are ONLY for already existing ClickCounters,
+        // never the ephemeral counter-creation branch in setCounter().
+        if(row.counterType!=='ClickCounter')continue;
+        const key=ALF_BOARD_HABIT_ANCHOR_PREFIX+row.id;
+        const rawAnchor=await api.loadSyncedData(key);
+        let anchor;
+        try{anchor=rawAnchor?JSON.parse(rawAnchor):null;}catch(_){}
+        if(anchor&&(anchor.version!==1||anchor.day!==day||
+          anchor.definitionId!==row.definitionId||
+          anchor.counterId!==row.counterId)){
+          result.conflicts++;continue;
+        }
+        // Do not overwrite a pre-existing native completion in Notion when
+        // the two stores have never established a common baseline. Later
+        // increases may count as a new completion event.
+        if(row.status!=='Done'&&row.count>=row.goal&&
+           (!anchor||anchor.status!==row.status||
+             anchor.count>=row.goal&&row.count<=anchor.count)){
+          row.stateConflict=true;result.conflicts++;
+        }
+        // Notion is the authority at first connect. A completed binary
+        // daily row can safely seed an already-created native ClickCounter.
+        if(row.status==='Done'&&row.count===0&&row.goal===1&&
+           (!anchor||anchor.status==='Done'&&anchor.count===0)&&
+           typeof api.setCounter==='function'){
+          // Recheck the native ID immediately before writing; setCounter()
+          // would create a NONPERSISTENT phantom if its ID were missing.
+          const latest=await api.getAllSimpleCounters();
+          if(latest.some(x=>x.id===row.counterId&&
+            x.title===row.title&&x.type==='ClickCounter'&&
+            x.isEnabled!==false)){
+            await api.setCounter(row.counterId,1);
+            row.count=1;result.written++;
+          }
+        }else if(anchor&&row.status!=='Done'&&!row.mixedTask&&
+          anchor.status===row.status&&
+          (anchor.count<row.goal||row.count>anchor.count)&&
+          row.count>=row.goal&&row.goal>0&&
+          ['Not started','In progress'].includes(row.status)){
+          // SP was used to complete a previously synchronized native habit.
+          // Always re-read exact Notion page identity and original status
+          // before PATCH. Never complete a dual-role task via habit changes.
+          const latest=await alfGraphRequest(api,token,'/pages/'+row.id);
+          const fresh=alfBoardHabitRecord(latest,c,day);
+          if(!fresh||fresh.id!==row.id||
+            fresh.definitionId!==row.definitionId||
+            fresh.title!==row.title||fresh.status!==row.status||
+            fresh.mixedTask||latest.in_trash){
+            result.conflicts++;continue;
+          }
+          const field=alfGraphField(latest,c,'statusProp');
+          const patched=await alfGraphRequest(api,token,
+            '/pages/'+row.id,'PATCH',{properties:{
+              [field.id]:{status:{name:'Done'}}}});
+          if(!patched||alfGraphId(patched.id)!==row.id)
+            throw new Error('Unconfirmed Notion habit status write');
+          row.status='Done';result.written++;
+        }
+        const next={version:1,day,definitionId:row.definitionId,
+          counterId:row.counterId,status:row.status,count:row.count};
+        if(JSON.stringify(anchor)!==JSON.stringify(next))
+          await api.persistDataSynced(JSON.stringify(next),key);
+      }
+      const snapshot={version:1,day,board,rows:resolved.map(row=>({
+        id:row.id,title:row.title,definitionId:row.definitionId,
+        day:row.day,status:row.status,mixedTask:row.mixedTask,
+        ambiguous:row.ambiguous,stateConflict:!!row.stateConflict,
+        counterId:row.counterId,
+        count:row.count,goal:row.goal
+      }))};
+      const serialized=JSON.stringify(snapshot);
+      if(serialized!==await api.loadSyncedData(ALF_NATIVE_HABITS_SNAPSHOT_KEY))
+        await api.persistDataSynced(serialized,ALF_NATIVE_HABITS_SNAPSHOT_KEY);
+      activeDay=day;
+    }catch(_){result.errors++;}
+    await alfStoreAutoStatus(api,'habits',result);
+    return result;
+  }
+  async function heartbeat(){
+    if(inflight||Date.now()-previous<intervalMs)return;
+    inflight=true;previous=Date.now();
+    try{return await runOnce();}finally{inflight=false;}
+  }
+  function start(){
+    if(timer!==null)return;
+    timer=setInterval(()=>{void heartbeat();},5000);
+    void heartbeat();
+  }
+  function stop(){if(timer!==null)clearInterval(timer);timer=null;}
+  return {runOnce,heartbeat,start,stop};
+}
+
+// Explicit execution click in the plug-in's Habits view, NOT an additional
+// connection/setup approval. The button acts only on a unique original daily
+// record, never on a definition or an unrelated task.
+async function alfCompleteBoardHabit(api,args){
+  if(!args||Object.keys(args).sort().join(',')!==
+      'day,definitionId,expectedStatus,pageId,title')
+    throw new Error('Invalid habit completion request');
+  const pageId=alfGraphId(args.pageId);
+  const definitionId=alfGraphId(args.definitionId);
+  if(!pageId||!definitionId||
+     typeof args.day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(args.day)||
+     typeof args.title!=='string'||!args.title||
+     !['Not started','In progress','Planned'].includes(args.expectedStatus))
+    throw new Error('Invalid original habit selection');
+  const local=await api.getDayContext();
+  if(!local||local.todayStr!==args.day)
+    throw new Error('Habit day changed');
+  if(await api.getSecret(ALF_GRAPH_AUTO_KEY)!=='enabled')
+    throw new Error('One-token Alf synchronization is not enabled');
+  const c=alfGraphSourceConfig(await api.loadSyncedData('alf-mapping-v2')).c;
+  const board=alfGraphId(c.taskSource);
+  const occ=c.habitPropertyBindings&&c.habitPropertyBindings.occurrences;
+  if(!occ||!occ.habitOccTypeProp||!occ.habitOccDayProp)
+    throw new Error('Verified daily habit schema missing');
+  const token=await api.getSecret('alf-notion-token');
+  if(!token)throw new Error('Notion connection missing');
+  const filter={and:[
+    {property:occ.habitOccTypeProp.id,multi_select:{contains:'عادة'}},
+    {property:occ.habitOccDayProp.id,date:{equals:args.day}}
+  ]};
+  const pages=await alfGraphAll(api,token,board,filter,300);
+  const records=pages.map(page=>alfBoardHabitRecord(page,c,args.day))
+    .filter(Boolean);
+  const expected=records.filter(x=>x.id===pageId&&
+    x.definitionId===definitionId&&x.title===args.title&&
+    x.status===args.expectedStatus&&!x.mixedTask);
+  if(expected.length!==1||
+     records.filter(x=>x.definitionId===definitionId).length!==1||
+     records.filter(x=>alfGraphName(x.title)===alfGraphName(args.title)).length!==1)
+    throw new Error('Daily habit missing, changed or ambiguous');
+  const fresh=await alfGraphRequest(api,token,'/pages/'+pageId);
+  const record=alfBoardHabitRecord(fresh,c,args.day);
+  if(!fresh||fresh.in_trash||
+     alfGraphId(fresh.parent&&fresh.parent.data_source_id)!==board||
+     !record||record.title!==args.title||
+     record.definitionId!==definitionId||record.mixedTask||
+     record.status!==args.expectedStatus)
+    throw new Error('Daily habit changed before completion');
+  const statusField=alfGraphField(fresh,c,'statusProp');
+  const changed=await alfGraphRequest(api,token,'/pages/'+pageId,
+    'PATCH',{properties:{[statusField.id]:{status:{name:'Done'}}}});
+  if(!changed||alfGraphId(changed.id)!==pageId)
+    throw new Error('Habit completion not confirmed');
+  return {completed:true,pageId};
+}
+
 if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
   const alfAutomaticPlan=alfCreateAutoPlanSync(PluginAPI);
   const alfAutomaticTime=alfCreateAutoTimeSync(PluginAPI);
   const alfAutomaticHabits=alfCreateAutoHabitSync(PluginAPI);
+  const alfDailyBoardHabits=alfCreateBoardHabitsSync(PluginAPI);
   const alfAutomaticGraph=alfCreateAutoGraphSync(PluginAPI);
   let alfGraphWakeTimer=null;
   function alfQueueGraphRecheck(){
@@ -3272,6 +3545,7 @@ if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
     alfAutomaticPlan.start();
     alfAutomaticTime.start();
     alfAutomaticHabits.start();
+    alfDailyBoardHabits.start();
     alfAutomaticGraph.start();
   });
   if(typeof PluginAPI.onUnload==='function')
@@ -3284,6 +3558,7 @@ if (typeof PluginAPI !== 'undefined' && typeof PluginAPI.onReady==='function') {
       alfAutomaticPlan.stop();
       alfAutomaticTime.stop();
       alfAutomaticHabits.stop();
+      alfDailyBoardHabits.stop();
       alfAutomaticGraph.stop();
     });
 }
