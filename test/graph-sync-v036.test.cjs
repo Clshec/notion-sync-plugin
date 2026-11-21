@@ -775,6 +775,39 @@ test('automatic graph activation never imports years of pre-existing records',as
   assert.equal(posts[0][3].properties['المصدر'].title[0].text.content,
     'New task after activation');
 });
+test('duplicate same-day Notion candidates cannot slip through one native write batch',async()=>{
+  const x=sample();
+  x.projects=[];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.tasks=[uid('a'),uid('b')].map(id=>{
+    const p=row(id,'الحمد',['عادة','مهمة'],null);
+    p.properties['يوم التنفيذ'].date.start='2026-11-21';
+    return run('alfGraphItem',p,mapping());
+  });
+  const f=fixture(x);
+  const snapshot=await run('alfGraphPlan',f.api,x);
+  assert.equal(snapshot.tasks.length,2,'both candidates were absent during scan');
+  const imported=await run('alfGraphApplyLocal',f.api,x,snapshot,{maxWrites:6});
+  assert.equal(imported.tasks,1);
+  assert.equal(imported.skipped,1,'the second collides at the write boundary');
+  assert.equal(f.tasks.length,1);
+  assert.equal(f.tasks[0].dueDay,'2026-11-21');
+});
+test('two different dated original occurrences can coexist without title deduplication',async()=>{
+  const x=sample();
+  x.projects=[];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.tasks=[['a','2026-11-20'],['b','2026-11-21']].map(([key,day])=>{
+    const p=row(uid(key),'الحمد',['عادة','مهمة'],null);
+    p.properties['يوم التنفيذ'].date.start=day;
+    return run('alfGraphItem',p,mapping());
+  });
+  const f=fixture(x);
+  const p=await run('alfGraphPlan',f.api,x);
+  const out=await run('alfGraphApplyLocal',f.api,x,p,{maxWrites:6});
+  assert.equal(out.tasks,2);
+  assert.deepEqual(f.tasks.map(t=>t.dueDay),['2026-11-20','2026-11-21']);
+});
 test('historical Notion backfill includes old projects and completed tasks without SP reverse-exporting old work',async()=>{
   const x=sample();
   x.projects=[{...x.projects[0],createdAt:100}];
