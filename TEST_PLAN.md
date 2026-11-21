@@ -1,4 +1,10 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.6 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.7 experimental)
+
+## v0.40.7 — public Notion filter validity and installed-host acceptance
+
+1. Query the original board using \`or:[{and:[kind,dayEquals]},{and:[kind,dateEmpty,createdOnOrAfter,createdBefore]}]\`. No third compound-filter nesting layer is allowed. Each created-time condition must have \`timestamp:'created_time'\` and exactly one date comparison.
+2. Native Windows SP plugin running on the previously connected local profile must replace the stale six-row snapshot automatically after upload, without reconnect/import/approve/AI/user assistance. Verify actual UI entries for أذكار المساء, المغرب and النوم.
+3. Do not reassign the three undated originals' \`يوم التنفيذ\`; confirm the other six dated originals remain, and the original Notion saved view still reports nine. The user's tenth-reported item remains a separate missing-source investigation rather than a fabricated Notion entry.
 
 ## v0.40.6 — match Notion's saved \`عادات اليوم\` filter exactly
 

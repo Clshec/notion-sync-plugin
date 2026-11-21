@@ -248,14 +248,19 @@ test('an original habit-day row without a definition relation remains visible as
 test('daily Notion view filter includes Created-today rows whose execution day is EMPTY',()=>{
   const occ=config().habitPropertyBindings.occurrences;
   const filter=JSON.parse(JSON.stringify(run('alfBoardHabitDayFilter',occ,day)));
-  assert.equal(filter.and[0].multi_select.contains,'عادة');
-  assert.equal(filter.and[1].or[0].date.equals,day);
-  const fallback=filter.and[1].or[1].and;
-  assert.equal(fallback[0].date.is_empty,true);
-  assert.equal(fallback[1].created_time.on_or_after,new Date(day+'T00:00:00').toISOString());
+  assert.equal(filter.or[0].and[0].multi_select.contains,'عادة');
+  assert.equal(filter.or[0].and[1].date.equals,day);
+  const fallback=filter.or[1].and;
+  assert.equal(fallback[0].multi_select.contains,'عادة');
+  assert.equal(fallback[1].date.is_empty,true);
+  assert.equal(fallback[2].timestamp,'created_time');
+  assert.equal(fallback[3].timestamp,'created_time');
+  assert.equal(Object.keys(fallback[2].created_time).length,1);
+  assert.equal(Object.keys(fallback[3].created_time).length,1);
+  assert.equal(fallback[2].created_time.on_or_after,new Date(day+'T00:00:00').toISOString());
   const tomorrow=new Date(day+'T00:00:00');
   tomorrow.setDate(tomorrow.getDate()+1);
-  assert.equal(fallback[1].created_time.before,tomorrow.toISOString());
+  assert.equal(fallback[3].created_time.before,tomorrow.toISOString());
 });
 test('same original Notion view returns 9: six explicitly dated and three Created-today',async()=>{
   // Reproduced from the 2026-11-21 "عادات اليوم" original Notion view:
@@ -291,7 +296,7 @@ test('same original Notion view returns 9: six explicitly dated and three Create
     assert.equal(snapshot.rows.filter(r=>r.title===name&&r.day===day).length,1);
   }
   const filter=f.events.find(e=>e[0]==='notion'&&e[1]==='POST')[3].filter;
-  assert.equal(filter.and[1].or[1].and[0].date.is_empty,true);
+  assert.equal(filter.or[1].and[1].date.is_empty,true);
   assert.equal(f.events.filter(e=>e[0]==='notion'&&e[1]==='PATCH').length,0);
 });
 test('empty execution date from YESTERDAY is rejected, without an accidental status write',async()=>{

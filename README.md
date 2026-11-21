@@ -1,5 +1,9 @@
 # Alf Notion Super Productivity
 
+### v0.40.7 — valid public Notion API filters for undated Created-today habits (DRAFT)
+
+The v0.40.6 attempted three levels of nested compound query filters. **The public Notion API supports at most two levels**, and timestamp conditions require the explicit discriminator \`timestamp:'created_time'\` plus **a single date comparator per filter**. This is why its installed host continued to show the stale previous six-item snapshot even after the correct Notion saved-view semantics were identified. v0.40.7 distributes the original habit-type condition into both OR branches (\`or → and → primitive\`) and creates two separate timestamp constraints for the local-day range. The automatic mirror and manual completion preflight both use this corrected shared query; neither requires another token or setup click. On a successful new scan the saved daily snapshot is replaced, with no edits to Notion's original dates.
+
 ### v0.40.6 — parity with Notion's real daily-habits view (DRAFT)
 
 **Bug found against the live original \`عادات اليوم\` view on 2026-11-21:** v0.40.5 showed only the **six** habit pages whose \`يوم التنفيذ\` exactly matched today. The original Notion saved view actually has an **OR condition**: \`يوم التنفيذ = today\` **or** \`يوم التنفيذ is empty AND Created = today\`, always with \`نوع الصفحة\` containing \`عادة\`. Its currently observed actual saved-view result is **nine**, with **three** previously invisible real original records: **أذكار المساء**, **المغرب**, and **النوم**. The user reports ten in their Notion UI, but the Notion connector saved-view query returned nine records (no more pages), so the tenth must not be invented or imported from a different day.

@@ -3271,14 +3271,22 @@ function alfBoardHabitDayFilter(occ,day){
     throw new Error('Invalid SP logical day for Notion habit filter');
   const end=new Date(start.getTime());
   end.setDate(end.getDate()+1);
-  return {and:[
-    {property:occ.habitOccTypeProp.id,multi_select:{contains:'عادة'}},
-    {or:[
-      {property:occ.habitOccDayProp.id,date:{equals:day}},
-      {and:[
-        {property:occ.habitOccDayProp.id,date:{is_empty:true}},
-        {created_time:{on_or_after:start.toISOString(),before:end.toISOString()}}
-      ]}
+  // The public Notion query API allows at most TWO compound-filter levels.
+  // Distribute the common "عادة" condition into each OR branch: OR -> AND
+  // -> primitives. Timestamp filters require timestamp:'created_time', with
+  // one condition per created_time object.
+  const kind={property:occ.habitOccTypeProp.id,
+    multi_select:{contains:'عادة'}};
+  return {or:[
+    {and:[
+      kind,{property:occ.habitOccDayProp.id,date:{equals:day}}
+    ]},
+    {and:[
+      kind,{property:occ.habitOccDayProp.id,date:{is_empty:true}},
+      {timestamp:'created_time',
+        created_time:{on_or_after:start.toISOString()}},
+      {timestamp:'created_time',
+        created_time:{before:end.toISOString()}}
     ]}
   ]};
 }
