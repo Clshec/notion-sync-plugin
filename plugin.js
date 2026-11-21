@@ -754,7 +754,7 @@ async function alfStoreAutoStatus(api,flow,stats) {
   // Notion tokens, request details or full synced data in these records.
   const numeric={};
   for(const key of ['processed','updated','written','timeWritten','anchored','skipped',
-    'unchanged','conflicts','errors']) {
+    'unchanged','conflicts','errors','backfillPending']) {
     if(Number.isSafeInteger(stats&&stats[key])&&stats[key]>=0)
       numeric[key]=stats[key];
   }
