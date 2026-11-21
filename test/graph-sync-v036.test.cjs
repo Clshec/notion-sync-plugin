@@ -775,6 +775,58 @@ test('automatic graph activation never imports years of pre-existing records',as
   assert.equal(posts[0][3].properties['المصدر'].title[0].text.content,
     'New task after activation');
 });
+test('historical Notion backfill includes old projects and completed tasks without SP reverse-exporting old work',async()=>{
+  const x=sample();
+  x.projects=[{...x.projects[0],createdAt:100}];
+  x.tasks=[{...x.tasks[0],createdAt:100,status:'Done',due:null},
+    {...x.tasks[1],createdAt:100,status:'Not started'}];
+  const f=fixture(x);
+  const plan=await run('alfGraphPlan',f.api,x);
+  const backfill=run('alfGraphOnlyNewEntities',plan,Date.now()-1000,{
+    includeHistoricalNotion:true,spProjectIdsBefore:new Set()});
+  assert.equal(backfill.projects.length,1);
+  assert.equal(backfill.tasks.length,2);
+  const created=await run('alfGraphApplyLocal',f.api,x,backfill,{maxWrites:6});
+  assert.equal(created.projects,1);
+  assert.equal(created.tasks,2);
+  const completed=f.tasks.find(t=>t.title==='Bundle A');
+  assert.equal(completed.isDone,true);
+  assert.equal(completed.dueDay,null,'undated old work must not be planned today');
+  const anchor=JSON.parse(f.saved.get('alf-graph-status-v1-'+bundle));
+  assert.equal(anchor.spDone,true);
+  const replay=await run('alfGraphPlan',f.api,{
+    ...x,spProjects:f.projects,spActive:f.tasks});
+  assert.equal(replay.tasks.length,0,'already imported old work must not repeat');
+  assert.equal(replay.projects.length,0);
+});
+test('52 dated historical Notion rows import in nine bounded batches without duplicates',async()=>{
+  const x=sample();
+  x.projects=[];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.tasks=Array.from({length:52},(_,i)=>({
+    id:i.toString(16).padStart(32,'0'),title:'Historical '+i,
+    kinds:['مهمة'],projects:[],parents:[],createdAt:100,
+    status:i===0?'In progress':'Done',
+    due:i===0?'2026-11-21':i===1?null:'2020-01-01',
+    estimateMs:null
+  }));
+  const f=fixture(x);
+  for(let cycle=0;cycle<9;cycle++){
+    const current={...x,spActive:f.tasks};
+    const plan=await run('alfGraphPlan',f.api,current);
+    const backlog=run('alfGraphOnlyNewEntities',plan,Date.now()-1000,{
+      includeHistoricalNotion:true});
+    const result=await run('alfGraphApplyLocal',f.api,current,backlog,
+      {maxWrites:6});
+    assert.ok(result.tasks<=6,'writes per cycle are bounded');
+  }
+  assert.equal(f.tasks.length,52);
+  assert.equal(f.tasks.filter(t=>t.isDone).length,51);
+  assert.equal(f.tasks[0].dueDay,'2026-11-21');
+  assert.equal(f.tasks[1].dueDay,null);
+  const finalPlan=await run('alfGraphPlan',f.api,{...x,spActive:f.tasks});
+  assert.equal(finalPlan.tasks.length,0);
+});
 test('new Notion task may bring only its older required small project, never all old projects',async()=>{
   const x=sample();
   x.projects=[
