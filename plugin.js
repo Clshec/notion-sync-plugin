@@ -1559,8 +1559,9 @@ function alfCreateAutoHabitSync(api,options) {
 // v0.36: original life-OS project/task graph. No data-source migrations.
 // The upper project/folder hierarchy remains in Notion. Only verified lower
 // projects become SP Projects; board bundles become SP parent tasks and board
-// tasks with an original bundle relation become SP subtasks. Nothing marked
-// as knowledge, learning, folders or daily habits becomes an SP task.
+// tasks with an original bundle relation become SP subtasks. Knowledge,
+// learning and folders never become SP tasks. Pure habits remain counters;
+// dated board rows explicitly typed BOTH habit and task are also real tasks.
 const ALF_GRAPH_PROJECT_LINK_PREFIX='alf-graph-project-v1-';
 const ALF_GRAPH_MAX_ROWS=2500;
 const ALF_GRAPH_MAX_WRITES_PER_REVIEW=12;
@@ -1627,7 +1628,10 @@ function alfGraphItem(page,c){
      !status||status.type!=='status'||!estimate||estimate.type!=='number'||
      !date||date.type!=='date')throw new Error('Board pinned schema mismatch');
   const kinds=type.multi_select.map(v=>v.name);
-  if(kinds.includes('عادة') || !kinds.some(v=>v==='مهمة'||v==='حزمة'))return null;
+  // A daily board occurrence can legitimately be both a habit and a task.
+  // Import its task facet by exact page identity; the independent habit
+  // reconciler must still use the same original day occurrence.
+  if(!kinds.some(v=>v==='مهمة'||v==='حزمة'))return null;
   const projects=(project.relation||[]).map(v=>alfGraphId(v.id)).filter(Boolean);
   const parents=(parent.relation||[]).map(v=>alfGraphId(v.id)).filter(Boolean);
   const t=(title.title||[]).map(v=>v.plain_text||(v.text&&v.text.content)||'').join('').trim();
@@ -1908,7 +1912,12 @@ async function alfGraphPlan(api,inventory){
       (pendingAdopt&&pendingAdopt.adoptSpId);
     if(potentialProject && active.some(sp=>
       sp&&sp.projectId===potentialProject&&
-      alfGraphName(sp.title)===alfGraphName(t.title))) {
+      alfGraphName(sp.title)===alfGraphName(t.title)&&
+      // A repeated task has a distinct Notion page per day. A prior-day
+      // SP task with the same title must not block today's occurrence.
+      // If either date is unknown or both dates match, stay fail-closed.
+      !(t.due && typeof sp.dueDay==='string' &&
+        /^\d{4}-\d{2}-\d{2}$/.test(sp.dueDay) && sp.dueDay!==t.due))) {
       skipped.conflicts++;continue;
     }
     const isSub=t.parents.length===1;
