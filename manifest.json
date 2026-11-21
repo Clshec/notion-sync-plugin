@@ -1,7 +1,7 @@
 {
   "id": "alf-notion-super-productivity",
   "name": "Alf Notion Super Productivity",
-  "version": "0.40.3",
+  "version": "0.40.4",
   "manifestVersion": 1,
   "minSupVersion": "20.0.0",
   "description": "One-token Notion-first automatic task/project sync with exact identity links, safe planning/time deltas and optional advanced diagnostics (experimental)",
