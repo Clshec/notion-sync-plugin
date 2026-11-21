@@ -1904,7 +1904,8 @@ async function alfGraphPlan(api,inventory){
       continue;
     }
     if(link){skipped.tasks++;skipped.reasons.missingLinkedTask++;continue;}
-    if(t.status==='Done'){skipped.tasks++;skipped.reasons.oldDone++;continue;}
+    // Historical completed Notion tasks are real records too. Import them
+    // completed via the native SP API, never as active work for Today.
     const pendingAdopt=actions.projects.find(p=>
       p.id===t.projects[0]&&p.adoptSpId);
     const potentialProject=t.projects.length===0?'INBOX_PROJECT':
@@ -2101,11 +2102,14 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
     const linkKey=alfGraphTaskLinkKey(t.id);
     if(await alfGraphExistingTaskLink(api,t.id)){result.skipped++;continue;}
     try{
+      const isDone=t.status==='Done';
       const payload={title:t.title,notes:alfGraphMarker(t.id),
-        isIgnoreShortSyntax:true,isDone:false};
+        isIgnoreShortSyntax:true,isDone,
+        // Explicit null prevents SP inheriting Today's planning date when
+        // the original Notion task has no date.
+        dueDay:t.due||null};
       if(projectId)payload.projectId=projectId;
       if(t.estimateMs!==null)payload.timeEstimate=t.estimateMs;
-      if(t.due)payload.dueDay=t.due;
       if(parentId)payload.parentId=parentId;
       const id=await api.addTask(payload);
       if(typeof id!=='string'||!id)throw new Error('SP task creation not confirmed');
@@ -2118,7 +2122,7 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
       if(['Not started','In progress','Done'].includes(t.status)) {
         await api.persistDataSynced(JSON.stringify({version:1,
           notionId:t.id,spId:id,sourceId:inventory.ids.board,
-          spDone:false,notionStatus:t.status}),
+          spDone:isDone,notionStatus:t.status}),
         ALF_GRAPH_STATUS_ANCHOR_PREFIX+t.id);
       }
       await api.persistDataSynced(JSON.stringify({version:1,
@@ -3034,14 +3038,21 @@ function alfGraphOnlyNewEntities(plan,sinceMs,options={}){
       graceMs>7*24*3600000)
     throw new Error('Unbounded historical Notion catch-up refused');
   const notionStart=Math.max(0,sinceMs-graceMs);
-  const tasks=plan.tasks.filter(t=>
-    Number.isSafeInteger(t.createdAt)&&t.createdAt>=notionStart);
+  const tasks=options.includeHistoricalNotion?plan.tasks.slice():
+    plan.tasks.filter(t=>
+      Number.isSafeInteger(t.createdAt)&&t.createdAt>=notionStart);
   const requiredBundles=new Set(tasks.map(t=>t.parent).filter(Boolean));
   for(const t of plan.tasks){
     if(requiredBundles.has(t.id)&&!tasks.some(x=>x.id===t.id))
       tasks.push(t);
   }
-  tasks.sort((a,b)=>Number(!!a.parent)-Number(!!b.parent));
+  // Never import a subtask before its parent. Among top-level tasks, do
+  // today's executable work before older completed history.
+  const dateToday=new Date().toISOString().slice(0,10);
+  const urgency=t=>t.status==='Done'?3:
+    t.due===dateToday?0:t.due?1:2;
+  tasks.sort((a,b)=>Number(!!a.parent)-Number(!!b.parent)||
+    urgency(a)-urgency(b)||String(a.id).localeCompare(String(b.id)));
   // A new Notion task can belong to an older legitimate small project that
   // SP has never seen. Create/adopt only that required parent project, not
   // the entire historical project backlog.
@@ -3058,9 +3069,10 @@ function alfGraphOnlyNewEntities(plan,sinceMs,options={}){
   const requiredSpParents=new Set(exportsTasks.map(t=>t.parentSpId)
     .filter(Boolean));
   return {...plan,
-    projects:plan.projects.filter(p=>
-      (Number.isSafeInteger(p.createdAt)&&p.createdAt>=sinceMs)||
-      requiredNotionProjects.has(p.id)),
+    projects:options.includeHistoricalNotion?plan.projects.slice():
+      plan.projects.filter(p=>
+        (Number.isSafeInteger(p.createdAt)&&p.createdAt>=sinceMs)||
+        requiredNotionProjects.has(p.id)),
     tasks,
     exportsProjects:plan.exportsProjects.filter(p=>
       (spExisting?!spExisting.has(p.spId):
@@ -3080,6 +3092,7 @@ function alfCreateAutoGraphSync(api,options={}){
   const probeFn=options.probe||alfGraphQuickProbe;
   const fullRefreshMs=options.fullRefreshMs||2*60*1000;
   let timer=null,inflight=false,previous=0,lastFull=0,probeSignature;
+  let drainingHistoricalBackfill=false;
   async function runOnce(){
     const result={enabled:false,processed:0,written:0,skipped:0,
       conflicts:0,errors:0,timeWritten:0};
@@ -3107,21 +3120,26 @@ function alfCreateAutoGraphSync(api,options={}){
       }
       const plan=await alfGraphPlan(api,inventory);
       const newPlan=alfGraphOnlyNewEntities(plan,cutoff.sinceMs,
-        {spProjectIdsBefore});
-      if([newPlan.projects,newPlan.tasks,newPlan.exportsProjects,
+        {spProjectIdsBefore,includeHistoricalNotion:true});
+      // The historical Notion backlog is imported in tiny, idempotent
+      // batches. Keep the >40 safeguard for potentially dangerous mass
+      // exports of unrelated SP entities INTO Notion only.
+      if([newPlan.exportsProjects,
         newPlan.exportsTasks].some(items=>items.length>40)){
         result.conflicts++;result.skipped++;
         await alfStoreAutoStatus(api,'graph',result);
         return result; // Never mutate an unreviewable backlog.
       }
-      const local=await alfGraphApplyLocal(api,inventory,newPlan,{maxWrites:3});
+      const local=await alfGraphApplyLocal(api,inventory,newPlan,{maxWrites:6});
+      result.backfillPending=Math.max(0,newPlan.projects.length+
+        newPlan.tasks.length-local.projects-local.tasks-local.skipped);
       // Re-read both sources after local creates. Never make reverse Notion
       // pages from the pre-write snapshot: a new SP task might have been
       // created as a consequence of this very cycle.
       const postLocalInventory=await inventoryFn(api);
       const postLocalPlan=await alfGraphPlan(api,postLocalInventory);
       const newPostLocalPlan=alfGraphOnlyNewEntities(postLocalPlan,
-        cutoff.sinceMs,{spProjectIdsBefore});
+        cutoff.sinceMs,{spProjectIdsBefore,includeHistoricalNotion:true});
       const upper=await api.getSecret(ALF_GRAPH_AUTO_PARENT_KEY)||'';
       const remote=await alfGraphApplyRemote(api,postLocalInventory,
         newPostLocalPlan,upper,{maxWrites:1,preferNewest:true});
@@ -3164,7 +3182,8 @@ function alfCreateAutoGraphSync(api,options={}){
     // cycle should start without a ten-minute delay.
     if(typeof api.getSecret!=='function' ||
        await api.getSecret(ALF_GRAPH_AUTO_KEY)!=='enabled'){
-      previous=0;lastFull=0;probeSignature=undefined;return;
+      previous=0;lastFull=0;probeSignature=undefined;
+      drainingHistoricalBackfill=false;return;
     }
     if(!force&&Date.now()-previous<intervalMs)return;
     // A long full scan must not be repeated continuously by every
@@ -3172,7 +3191,8 @@ function alfCreateAutoGraphSync(api,options={}){
     if(force&&lastFull&&Date.now()-lastFull<15000)return;
     inflight=true;previous=Date.now();
     try{
-      if(!force&&lastFull&&Date.now()-lastFull<fullRefreshMs){
+      if(!force&&!drainingHistoricalBackfill&&lastFull&&
+         Date.now()-lastFull<fullRefreshMs){
         let changed;
         try{
           const next=await probeFn(api);
@@ -3189,6 +3209,11 @@ function alfCreateAutoGraphSync(api,options={}){
       const result=await runOnce();
       if(result&&result.enabled){
         lastFull=Date.now();
+        // Keep scanning while we make verified native progress; without
+        // this, the Notion-only change probe would postpone each batch to
+        // the two-minute fallback despite pending historical pages.
+        drainingHistoricalBackfill=!!(result.backfillPending>0&&
+          result.written>0&&!result.errors);
       }
       return result;
     }
