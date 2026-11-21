@@ -859,6 +859,9 @@ test('52 dated historical Notion rows import in nine bounded batches without dup
   assert.equal(f.tasks[1].dueDay,null);
   const finalPlan=await run('alfGraphPlan',f.api,{...x,spActive:f.tasks});
   assert.equal(finalPlan.tasks.length,0);
+  assert.equal(finalPlan.exportsTasks.length,0,
+    'historical Notion imports must not be sent back as newly created SP work');
+  assert.equal(f.events.some(event=>event[0]==='notion'),false);
 });
 test('new Notion task may bring only its older required small project, never all old projects',async()=>{
   const x=sample();
