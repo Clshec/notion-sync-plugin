@@ -2108,7 +2108,7 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
       sp&&sp.projectId===targetProject&&
       alfGraphName(sp.title)===alfGraphName(t.title)&&
       !(t.due&&typeof sp.dueDay==='string'&&
-        /^\\d{4}-\\d{2}-\\d{2}$/.test(sp.dueDay)&&sp.dueDay!==t.due));
+        /^\d{4}-\d{2}-\d{2}$/.test(sp.dueDay)&&sp.dueDay!==t.due));
     if(sameDayCollision){result.skipped++;continue;}
     const linkKey=alfGraphTaskLinkKey(t.id);
     if(await alfGraphExistingTaskLink(api,t.id)){result.skipped++;continue;}
