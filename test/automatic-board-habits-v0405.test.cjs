@@ -257,9 +257,9 @@ test('daily Notion view filter includes Created-today rows whose execution day i
   assert.equal(fallback[3].timestamp,'created_time');
   assert.equal(Object.keys(fallback[2].created_time).length,1);
   assert.equal(Object.keys(fallback[3].created_time).length,1);
-  assert.equal(fallback[2].created_time.on_or_after,new Date(day+'T00:00:00').toISOString());
-  const tomorrow=new Date(day+'T00:00:00');
-  tomorrow.setDate(tomorrow.getDate()+1);
+  assert.equal(fallback[2].created_time.on_or_after,new Date(day+'T00:00:00Z').toISOString());
+  const tomorrow=new Date(day+'T00:00:00Z');
+  tomorrow.setUTCDate(tomorrow.getUTCDate()+1);
   assert.equal(fallback[3].created_time.before,tomorrow.toISOString());
 });
 test('same original Notion view returns 9: six explicitly dated and three Created-today',async()=>{
@@ -321,4 +321,36 @@ test('marking a Created-today habit complete succeeds with exact page identity w
   assert.equal(done.completed,true);
   assert.equal(p.properties.Status.status.name,'Done');
   assert.equal(p.properties['يوم التنفيذ'].date,null);
+});
+test('real Notion saved view excludes four undated late-night UTC yesterday rows even in Cairo',async()=>{
+  // These exact real rows appeared as false positives in the Windows v0.40.7
+  // local-day bucket. Notion's saved "عادات اليوم" result excludes all four.
+  const yesterday=[
+    {title:'العصر',time:'2026-11-20T23:47:00.000Z'},
+    {title:'الظهر',time:'2026-11-20T23:42:00.000Z'},
+    {title:'العشاء',time:'2026-11-20T22:46:00.000Z'},
+    {title:'أذكار الصباح',time:'2026-11-20T22:10:00.000Z'}
+  ];
+  const pages=yesterday.map((item,i)=>{
+    const p=page(uid(String(i+4)),item.title,uid(String(i+5)));
+    p.properties['يوم التنفيذ'].date=null;
+    p.created_time=item.time;return p;
+  });
+  const f=fixture(pages);
+  const result=await run('alfCreateBoardHabitsSync',f.api).runOnce();
+  assert.equal(result.processed,0);
+  assert.equal(result.conflicts,4);
+  assert.equal(JSON.parse(f.saved.get('alf-board-habits-today-v1')).rows.length,0);
+  const filter=f.events.find(e=>e[0]==='notion'&&e[1]==='POST')[3].filter;
+  assert.equal(filter.or[1].and[2].created_time.on_or_after,'2026-11-21T00:00:00.000Z');
+  assert.equal(filter.or[1].and[3].created_time.before,'2026-11-22T00:00:00.000Z');
+});
+test('UTC midnight Created today is included without a separate execution date',async()=>{
+  const p=page(uid('4'),'النوم',uid('5'));
+  p.properties['يوم التنفيذ'].date=null;
+  p.created_time='2026-11-21T00:00:00.000Z';
+  const f=fixture([p]);
+  const result=await run('alfCreateBoardHabitsSync',f.api).runOnce();
+  assert.equal(result.processed,1);
+  assert.equal(result.missing,1);
 });

@@ -3255,22 +3255,22 @@ function alfCreateAutoGraphSync(api,options={}){
 // populated. Missing rows are nevertheless available in this plugin's own
 // SP side panel without requiring a second import/setup action.
 const ALF_BOARD_HABIT_ANCHOR_PREFIX='alf-board-habit-anchor-v1-';
-// Match the original Notion "عادات اليوم" view: execution day OR, only
-// when execution day is empty, the row's creation day. Use the device's
-// logical local calendar day (SP day context), not UTC substring slicing.
-function alfBoardHabitLocalDay(date){
+// Match the actual original Notion saved-view result observed via its data
+// source: Created=today is a UTC-day bucket, unlike the device's wall-clock
+// date. For example, 2026-11-20T23:47Z is excluded by Notion's view for
+// 2026-11-21 even when Windows in Cairo reports 01:47 on Nov 21. The SP
+// logical day still selects which target YYYY-MM-DD we ask Notion for.
+function alfBoardHabitCreatedDay(date){
   const d=date instanceof Date?date:new Date(date);
   if(!Number.isFinite(d.getTime()))return '';
-  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),
-    String(d.getDate()).padStart(2,'0')].join('-');
+  return d.toISOString().slice(0,10);
 }
 function alfBoardHabitDayFilter(occ,day){
-  const start=new Date(day+'T00:00:00');
+  const start=new Date(day+'T00:00:00Z');
   if(!Number.isFinite(start.getTime())||
-     alfBoardHabitLocalDay(start)!==day)
+     alfBoardHabitCreatedDay(start)!==day)
     throw new Error('Invalid SP logical day for Notion habit filter');
-  const end=new Date(start.getTime());
-  end.setDate(end.getDate()+1);
+  const end=new Date(start.getTime()+24*60*60*1000);
   // The public Notion query API allows at most TWO compound-filter levels.
   // Distribute the common "عادة" condition into each OR branch: OR -> AND
   // -> primitives. Timestamp filters require timestamp:'created_time', with
@@ -3307,7 +3307,7 @@ function alfBoardHabitRecord(page,c,day){
   if(!types.includes('عادة')||
      (date.date?
        (date.date.start!==day||!!date.date.end):
-       alfBoardHabitLocalDay(page.created_time)!==day))return null;
+       alfBoardHabitCreatedDay(page.created_time)!==day))return null;
   const id=alfGraphId(page.id);
   const text=(title.title||[]).map(x=>x.plain_text||
     x.text&&x.text.content||'').join('').trim();

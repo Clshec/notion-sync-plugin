@@ -1,5 +1,9 @@
 # Alf Notion Super Productivity
 
+### v0.40.8 — correct Created-day boundary after installed-host verification (DRAFT)
+
+**Real host evidence:** v0.40.7 successfully queried the original Notion board and the host HTTP 200 response contained **13** candidate pages. Its device-local Cairo Created-day fallback included four **extra** undated pages originally created at **2026-11-20 22:10–23:47 UTC**: العصر، الظهر، العشاء، أذكار الصباح. Reopening the plugin panel confirmed all 13 showed up (six existing native counters, seven in-plugin only). However, the original Notion saved \`عادات اليوم\` connector view still returned **nine**, excluding those four extra pages. v0.40.8 aligns the fallback *Created-today* bucket to **00:00 UTC → next 00:00 UTC** for the device-selected SP logical date. A dated original task still uses exact \`يوم التنفيذ\` without being reassigned. This yields the original observed **six dated + three Created-today** rows; does not infer or create the tenth row the user reports.
+
 ### v0.40.7 — valid public Notion API filters for undated Created-today habits (DRAFT)
 
 The v0.40.6 attempted three levels of nested compound query filters. **The public Notion API supports at most two levels**, and timestamp conditions require the explicit discriminator \`timestamp:'created_time'\` plus **a single date comparator per filter**. This is why its installed host continued to show the stale previous six-item snapshot even after the correct Notion saved-view semantics were identified. v0.40.7 distributes the original habit-type condition into both OR branches (\`or → and → primitive\`) and creates two separate timestamp constraints for the local-day range. The automatic mirror and manual completion preflight both use this corrected shared query; neither requires another token or setup click. On a successful new scan the saved daily snapshot is replaced, with no edits to Notion's original dates.

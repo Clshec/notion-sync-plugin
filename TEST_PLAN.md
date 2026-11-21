@@ -1,4 +1,10 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.7 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.8 experimental)
+
+## v0.40.8 — exact Notion saved-view UTC Created-day parity
+
+1. Compare the live SP host v0.40.7 13-result query, then confirm it falsely included undated Created timestamps of 2026-11-20 22:10, 22:46, 23:42, 23:47 UTC (العشاء، الظهر، العصر، أذكار الصباح). The original saved view has nine rows; these four are not among them.
+2. For \`يوم التنفيذ\` empty only, select original \`Created\` UTC YYYY-MM-DD, and query \`created_time\` in UTC day range. Preserve exact SP logical day selection and original null date. After a hot upgrade, close/reopen the existing Alf side panel to prevent the old iframe from showing a stale snapshot.
+3. Read the live SP panel; it should show nine originals, six matched built-in native habits and three unmatched original daily occurrences (المغرب، أذكار المساء، النوم), with no user configuration click. Do not report ten without a verified tenth Notion page ID.
 
 ## v0.40.7 — public Notion filter validity and installed-host acceptance
 
