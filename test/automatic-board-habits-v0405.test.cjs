@@ -322,6 +322,20 @@ test('marking a Created-today habit complete succeeds with exact page identity w
   assert.equal(p.properties.Status.status.name,'Done');
   assert.equal(p.properties['يوم التنفيذ'].date,null);
 });
+test('a habit with an unrelated extra type remains independently completable',async()=>{
+  const p=page(uid('4'),'النوم',uid('5'),'Not started',['عادة','تدوين']);
+  const f=fixture([p]);
+  const result=await run('alfCreateBoardHabitsSync',f.api).runOnce();
+  assert.equal(result.processed,1);
+  const snapshot=JSON.parse(f.saved.get('alf-board-habits-today-v1'));
+  assert.equal(snapshot.rows[0].mixedTask,false);
+  const done=await run('alfCompleteBoardHabit',f.api,{
+    pageId:p.id,definitionId:uid('5'),day,title:'النوم',
+    expectedStatus:'Not started'
+  });
+  assert.equal(done.completed,true);
+  assert.equal(p.properties.Status.status.name,'Done');
+});
 test('real Notion saved view excludes four undated late-night UTC yesterday rows even in Cairo',async()=>{
   // These exact real rows appeared as false positives in the Windows v0.40.7
   // local-day bucket. Notion's saved "عادات اليوم" result excludes all four.

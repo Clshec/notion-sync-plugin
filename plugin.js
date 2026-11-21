@@ -798,6 +798,8 @@ function alfAutoPlanSpec(c) {
       throw new Error('Stable task property ID required for automatic planning: ' + key);
   }
   const spec={sourceId, input, ids, unit:c.unit, allowed};
+  // Retain legacy spec field for existing saved anchor signatures. It is
+  // intentionally NOT a veto against another independently allowed facet.
   if(c.alfProfile && c.alfProfile.name==='alf-life-os')
     spec.excludedHabit=c.habitOccTypeValue||'عادة';
   return spec;
@@ -867,7 +869,9 @@ function alfAutoAllowedType(page, spec) {
   const values = field.type === 'multi_select'
     ? (field.multi_select || []).map(x => x.name)
     : field.type === 'select' && field.select ? [field.select.name] : [];
-  if(spec.excludedHabit && values.includes(spec.excludedHabit))return false;
+  // Notion "نوع الصفحة" is a multi-select, not an exclusive enum:
+  // ["مهمة","عادة"] must expose the task facet AND the habit facet.
+  // An unrelated additional classification must not veto an allowed facet.
   return values.some(value => spec.allowed.includes(value));
 }
 function alfAutoCurrentPlan(task) {
@@ -1064,6 +1068,7 @@ function alfAutoTimeSpec(c) {
       (observedId&&observedId===actualId)))
     throw new Error('Actual tracked time and observed Pomodoro count cannot share a Notion Number property');
   const spec={sourceId,typeId,actualId,unit:c.unit,allowed};
+  // Retain legacy anchor signature, without excluding mixed page types.
   if(c.alfProfile && c.alfProfile.name==='alf-life-os')
     spec.excludedHabit=c.habitOccTypeValue||'عادة';
   return spec;
@@ -1089,7 +1094,8 @@ function alfAutoTimePage(page,spec,notionId) {
   const typeValues=t&&t.type==='multi_select'?
     (t.multi_select||[]).map(x=>x.name):
     t&&t.type==='select'&&t.select?[t.select.name]:[];
-  if(spec.excludedHabit && typeValues.includes(spec.excludedHabit))return null;
+  // A dual-role habit+task page can contain legitimate work-time data.
+  // Validate by the task facet, independent of its habit classification.
   if(!typeValues.some(x=>spec.allowed.includes(x)))return null;
   const actual=alfAutoProp(page,spec.actualId);
   if(!actual||actual.type!=='number')return null;
@@ -3319,7 +3325,10 @@ function alfBoardHabitRecord(page,c,day){
        'cancelled'].includes(value))return null;
   return {id,title:text,day,definitionId:definitions.length===1?
     definitions[0]:null,missingRelation:definitions.length!==1,status:value,
-    mixedTask:types.some(type=>type!=='عادة')};
+     // Only an actual task/bundle facet shares the task Status and must
+     // block habit-driven Status completion. Extra tags like تدوين alone
+     // should not make a habit ineligible.
+     mixedTask:types.some(type=>type==='مهمة'||type==='حزمة')};
 }
 function alfBoardHabitCandidates(rows,counters){
   const names=new Map(),rowNames=new Map(),defs=new Map();

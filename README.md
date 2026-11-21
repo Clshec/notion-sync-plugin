@@ -1,5 +1,13 @@
 # Alf Notion Super Productivity
 
+### v0.40.9 — independent multi-select page roles: a task can ALSO be a habit (DRAFT)
+
+The user's original Notion \`نوع الصفحة\` is a **multi-select**. Membership is inclusive, not mutually exclusive. A single original \`اللوح\` page with \`["مهمة","عادة"]\` or \`["مهمة","عادة","تدوين"]\` must appear in **the task workflow AND the daily-habits workflow**, using **the same Notion page ID** and without duplicating Notion pages or tasks. The graph's core task importer and daily-habit mirror already supported this for \`الحمد\` in installed v0.40.8; however, an outdated exclusivity veto in the legacy automatic task-planning, time-export and manual task-preview/import paths blocked the task facet when the habit tag was also present. v0.40.9 fixes those paths; habit-only pages still never enter the task importer. Old baseline signatures remain compatible. An extra non-task classification (e.g. \`["عادة","تدوين"]\`) no longer blocks the habit completion action.
+
+**Important:** showing two roles does **not** mean that completing an independent habit goal automatically marks a dual-role task Done. The existing Notion page only has one \`Status\` property; automatic habit-driven Status updates on pages that have \`مهمة\` or \`حزمة\` are deliberately withheld to avoid silently completing the task. Its habit counter and separate task status can be displayed at the same time. No second user setup step is required.
+
+This addresses the real exclusivity bug but does not itself prove the existence of a tenth daily habit. The connected live original Notion \`عادات اليوم\` saved view has continued to return nine source page IDs, including the dual-role \`الحمد\`.
+
 ### v0.40.8 — correct Created-day boundary after installed-host verification (DRAFT)
 
 **Real host evidence:** v0.40.7 successfully queried the original Notion board and the host HTTP 200 response contained **13** candidate pages. Its device-local Cairo Created-day fallback included four **extra** undated pages originally created at **2026-11-20 22:10–23:47 UTC**: العصر، الظهر، العشاء، أذكار الصباح. Reopening the plugin panel confirmed all 13 showed up (six existing native counters, seven in-plugin only). However, the original Notion saved \`عادات اليوم\` connector view still returned **nine**, excluding those four extra pages. v0.40.8 aligns the fallback *Created-today* bucket to **00:00 UTC → next 00:00 UTC** for the device-selected SP logical date. A dated original task still uses exact \`يوم التنفيذ\` without being reassigned. This yields the original observed **six dated + three Created-today** rows; does not infer or create the tenth row the user reports.

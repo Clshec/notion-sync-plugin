@@ -102,7 +102,11 @@ test('original board imports the task facet of dual-role habit rows but not habi
   assert.equal(dual.title,'الحمد');
   assert.equal(dual.due,'2026-11-18');
   assert.equal(run('alfGraphItem',
+    row(uid('a'),'الحمد',['تدوين','عادة','مهمة']),mapping()).title,'الحمد');
+  assert.equal(run('alfGraphItem',
     row(uid('9'),'Habit only',['عادة']),mapping()),null);
+  assert.equal(run('alfGraphItem',
+    row(uid('b'),'Knowledge only',['تدوين']),mapping()),null);
   const childItem=run('alfGraphItem',row(child,'Child A',['مهمة'],small,bundle),mapping());
   assert.equal(childItem.parents[0],bundle);
   assert.equal(childItem.projects[0],small);

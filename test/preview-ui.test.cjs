@@ -757,7 +757,7 @@ test('duplicate daily occurrences for one habit/day stay visible but unlinked',a
   assert.match(env.els('dailyHabitsReport').textContent,/2 علاقة ناقصة أو مكررة/);
 });
 
-test('Alf mixed task+habit page is excluded from SP task preview and import',async()=>{
+test('Alf mixed task+habit page is included in task preview without duplicate or implicit import',async()=>{
   const row=aDailyBoardRow('mixed-habit','Read 20m','2026-11-16','habitA',
     ['مهمة','عادة']);
   const env=mount([row],null,null,{
@@ -773,8 +773,8 @@ test('Alf mixed task+habit page is excluded from SP task preview and import',asy
   env.els('token').value='ntn_SYNTHETIC_NOT_REAL';
   await env.els('save').events.click();
   await env.els('previewBtn').events.click();
-  assert.equal(env.els('results').children.length,0,
-    'one mixed daily habit cannot also become a normal SP task');
+  assert.equal(env.els('results').children.length,1,
+    'same original daily habit can expose its task facet without losing the habit facet');
   assert.equal(env.imports.length,0);
   assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
 });

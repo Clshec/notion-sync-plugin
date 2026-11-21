@@ -2540,11 +2540,11 @@ code {font:inherit;white-space:nowrap}
     });
     return links;
   }
-  // A page with BOTH 'عادة' and 'مهمة' is a daily habit, not two SP entities.
+  // Notion multi-select types are independent facets. A page with BOTH
+  // 'عادة' and 'مهمة' is eligible in task and habit views under the SAME
+  // original Notion page ID. Never create two copies of its task facet.
   function taskTypesAllowed(page,c,allowed) {
     var types=typeValue(taskProperty(page,c,'typeProp'));
-    if(c.alfProfile && c.alfProfile.name==='alf-life-os' &&
-       types.includes(c.habitOccTypeValue||'عادة'))return false;
     return types.some(function(type){return allowed.includes(type);});
   }
   async function previewDailyBoardHabits() {

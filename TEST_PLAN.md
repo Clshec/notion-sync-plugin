@@ -1,4 +1,11 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.8 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.9 experimental)
+
+## v0.40.9 — type facets are inclusive, never exclusive
+
+1. A real original \`اللوح\` page with both \`مهمة\` and \`عادة\` must remain in the task inventory and in the \`عادات اليوم\` mirror under its **one** Notion page identity. Add a third type, such as \`تدوين\`, and assert neither facet disappears. No second task or Notion page should be created.
+2. Task-only rows appear in tasks but not habits; habit-only rows appear in habits but not task inventory. Legacy automatic planning and actual work-time paths must not veto mixed-role pages solely because of \`عادة\`, and already-approved anchors should keep their serialized spec signatures.
+3. For \`["عادة","تدوين"]\` (no task facet), the habit may be completed safely. For \`["عادة","مهمة"]\`, habit progress must not silently update the shared Notion task \`Status\`; verify the original task continues in Today until independently completed.
+4. After reinstallation, verify \`الحمد\` remains in both Today and the Alf habits view without reconnect or manual import. The separate nine-versus-ten original-source count remains open until a tenth page ID is verified.
 
 ## v0.40.8 — exact Notion saved-view UTC Created-day parity
 
