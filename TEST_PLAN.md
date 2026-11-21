@@ -1,5 +1,16 @@
 # Alf Notion ↔ Super Productivity — acceptance plan (v0.40.2 experimental)
 
+## v0.40.4 — zero-AI, resumable historical Notion backfill acceptance
+
+1. In a disposable SP 20+ profile, install a verified build, enter **only** the Notion integration token and grant only the original existing sources in Notion. Do not click manual import, AI-assisted mapping, or historical approval.
+2. Read-only inventory must include all verified old original `المستويات الفرعية` **projects** and original `اللوح` `مهمة`/`حزمة` rows, excluding unrelated folders/course/content. Old `Done` tasks must import completed, old undated tasks must not be assigned to Today, and the original due day must be retained.
+3. Import at most **six** local creates/adoptions in one graph cycle. Confirm more than 40 eligible Notion source items are not a global blocker; verify automatic draining, reconnect/restart midway, stable Notion page ID links, no duplicates, and no inadvertent historical SP→Notion bulk exports.
+4. Verify today's dual-role `الحمد` Notion page and yesterday's *distinct* `الحمد` page coexist, each with its original `dueDay`. Two ambiguous same-title and same-day unlinked records must stop without silent duplicate even if both appear in one pre-write inventory.
+5. Confirm prior-day completed tasks are not reopened or assigned to Today, status anchors mark historical `Done` as `spDone:true`, and no Notion Status/relations/actual-time are altered during first import.
+6. Inspect excluded/ambiguous counts, run native `node --test` full regression suite and self-hosted **Woodpecker**; test full Windows host persistence and Android only after single-writer conflict locking is implemented. Historical upper-level project hierarchy, `cancelled` semantics, and native creation of missing SP Habits counters remain separate acceptance gates.
+
+**Current evidence (not production acceptance):** A JS-only Node-like compatibility test harness executed all 53 graph regression cases successfully. Standalone synthetic 52-task import passed in nine batches, 51 `Done` and no replay duplication. Actual Node suite, Woodpecker, and Windows host are blocked by the disconnected Windows bridge and unactivated CI repository; do not claim these tests ran.
+
 ## v0.40.3 — dual-type daily Notion task recurrence acceptance
 
 - **Real read-only source evidence (2026-11-21):** the original `اللوح` contains one 2026-11-21 `الحمد` row with `نوع الصفحة = [عادة, مهمة]`, `Status = In progress`, `يوم التنفيذ = 2026-11-21`, and a relation to the original habit definition. Its 2026-11-20 row is a different page ID and is Done. No original page was modified in the diagnosis.
