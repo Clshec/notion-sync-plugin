@@ -96,12 +96,56 @@ function fixture(inventory=sample()){
   };
   return {api,saved,events,projects,tasks,inventory};
 }
-test('original board maps bundle to parent, task relation to subtask, excludes mixed habit',()=>{
-  assert.equal(run('alfGraphItem',row(uid('8'),'Habit task',['مهمة','عادة']),mapping()),null);
+test('original board imports the task facet of dual-role habit rows but not habit-only rows',()=>{
+  const dual=run('alfGraphItem',row(uid('8'),'الحمد',['عادة','مهمة']),mapping());
+  assert.ok(dual);
+  assert.equal(dual.title,'الحمد');
+  assert.equal(dual.due,'2026-11-18');
+  assert.equal(run('alfGraphItem',
+    row(uid('9'),'Habit only',['عادة']),mapping()),null);
   const childItem=run('alfGraphItem',row(child,'Child A',['مهمة'],small,bundle),mapping());
   assert.equal(childItem.parents[0],bundle);
   assert.equal(childItem.projects[0],small);
   assert.equal(childItem.estimateMs,5400000);
+});
+test('dual-role recurring الحمد appears Today even if yesterday same-title task exists',async()=>{
+  const x=sample();
+  const daily=row(uid('8'),'الحمد',['عادة','مهمة'],null);
+  daily.properties['يوم التنفيذ'].date.start='2026-11-21';
+  daily.properties.Status.status.name='In progress';
+  daily.created_time=new Date().toISOString();
+  x.projects=[];
+  x.tasks=[run('alfGraphItem',daily,mapping())];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.spArchive=[{id:'past-day-task',title:'الحمد',projectId:'INBOX_PROJECT',
+    dueDay:'2026-11-20',isDone:true,notes:'',subTaskIds:[]}];
+  const f=fixture(x);
+  const plan=await run('alfGraphPlan',f.api,x);
+  assert.equal(plan.tasks.length,1);
+  assert.equal(plan.tasks[0].id,uid('8'));
+  assert.equal(plan.tasks[0].due,'2026-11-21');
+  const result=await run('alfGraphApplyLocal',f.api,x,plan);
+  assert.equal(result.tasks,1);
+  assert.equal(f.tasks.length,1);
+  assert.equal(f.tasks[0].title,'الحمد');
+  assert.equal(f.tasks[0].dueDay,'2026-11-21');
+  assert.ok(f.tasks[0].notes.includes('alf-notion-page-id:'));
+  const repeat=await run('alfGraphPlan',f.api,{...x,spActive:f.tasks});
+  assert.equal(repeat.tasks.length,0,'must not recreate linked same-day page');
+});
+test('same-day unlinked task with identical title remains an import conflict',async()=>{
+  const x=sample();
+  const daily=row(uid('8'),'الحمد',['عادة','مهمة'],null);
+  daily.properties['يوم التنفيذ'].date.start='2026-11-21';
+  x.projects=[];
+  x.tasks=[run('alfGraphItem',daily,mapping())];
+  x.spProjects=[{id:'INBOX_PROJECT',title:'Inbox'}];
+  x.spActive=[{id:'user-today-task',title:'الحمد',
+    projectId:'INBOX_PROJECT',dueDay:'2026-11-21',notes:'',isDone:false}];
+  const f=fixture(x);
+  const plan=await run('alfGraphPlan',f.api,x);
+  assert.equal(plan.tasks.length,0);
+  assert.ok(plan.skipped.conflicts>0);
 });
 test('verified lower project and bundle graph creates native persistent SP entities in order',async()=>{
   const f=fixture();
