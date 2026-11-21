@@ -3255,6 +3255,33 @@ function alfCreateAutoGraphSync(api,options={}){
 // populated. Missing rows are nevertheless available in this plugin's own
 // SP side panel without requiring a second import/setup action.
 const ALF_BOARD_HABIT_ANCHOR_PREFIX='alf-board-habit-anchor-v1-';
+// Match the original Notion "عادات اليوم" view: execution day OR, only
+// when execution day is empty, the row's creation day. Use the device's
+// logical local calendar day (SP day context), not UTC substring slicing.
+function alfBoardHabitLocalDay(date){
+  const d=date instanceof Date?date:new Date(date);
+  if(!Number.isFinite(d.getTime()))return '';
+  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),
+    String(d.getDate()).padStart(2,'0')].join('-');
+}
+function alfBoardHabitDayFilter(occ,day){
+  const start=new Date(day+'T00:00:00');
+  if(!Number.isFinite(start.getTime())||
+     alfBoardHabitLocalDay(start)!==day)
+    throw new Error('Invalid SP logical day for Notion habit filter');
+  const end=new Date(start.getTime());
+  end.setDate(end.getDate()+1);
+  return {and:[
+    {property:occ.habitOccTypeProp.id,multi_select:{contains:'عادة'}},
+    {or:[
+      {property:occ.habitOccDayProp.id,date:{equals:day}},
+      {and:[
+        {property:occ.habitOccDayProp.id,date:{is_empty:true}},
+        {created_time:{on_or_after:start.toISOString(),before:end.toISOString()}}
+      ]}
+    ]}
+  ]};
+}
 function alfBoardHabitRecord(page,c,day){
   const board=alfGraphId(c.taskSource);
   const bindings=c.habitPropertyBindings&&c.habitPropertyBindings.occurrences;
@@ -3269,8 +3296,10 @@ function alfBoardHabitRecord(page,c,day){
      page.parent&&page.parent.data_source_id&&
        alfGraphId(page.parent.data_source_id)!==board)return null;
   const types=(kinds.multi_select||[]).map(x=>x.name);
-  if(!types.includes('عادة')||!date.date||date.date.start!==day||
-     date.date.end)return null;
+  if(!types.includes('عادة')||
+     (date.date?
+       (date.date.start!==day||!!date.date.end):
+       alfBoardHabitLocalDay(page.created_time)!==day))return null;
   const id=alfGraphId(page.id);
   const text=(title.title||[]).map(x=>x.plain_text||
     x.text&&x.text.content||'').join('').trim();
@@ -3344,10 +3373,7 @@ function alfCreateBoardHabitsSync(api,options={}){
         if(!pinned||pinned.type!==type)
           throw new Error('Notion original habit pin changed');
       }
-      const filter={and:[
-        {property:occ.habitOccTypeProp.id,multi_select:{contains:'عادة'}},
-        {property:occ.habitOccDayProp.id,date:{equals:day}}
-      ]};
+      const filter=alfBoardHabitDayFilter(occ,day);
       const pages=await load(api,token,board,filter,300);
       if(!Array.isArray(pages)||pages.length>300)
         throw new Error('Unbounded original habit inventory');
@@ -3488,10 +3514,7 @@ async function alfCompleteBoardHabit(api,args){
     throw new Error('Verified daily habit schema missing');
   const token=await api.getSecret('alf-notion-token');
   if(!token)throw new Error('Notion connection missing');
-  const filter={and:[
-    {property:occ.habitOccTypeProp.id,multi_select:{contains:'عادة'}},
-    {property:occ.habitOccDayProp.id,date:{equals:args.day}}
-  ]};
+  const filter=alfBoardHabitDayFilter(occ,args.day);
   const pages=await alfGraphAll(api,token,board,filter,300);
   const records=pages.map(page=>alfBoardHabitRecord(page,c,args.day))
     .filter(Boolean);

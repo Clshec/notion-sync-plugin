@@ -245,3 +245,75 @@ test('an original habit-day row without a definition relation remains visible as
   assert.equal(snapshot.rows[0].ambiguous,true);
   assert.equal(snapshot.rows[0].counterId,null);
 });
+test('daily Notion view filter includes Created-today rows whose execution day is EMPTY',()=>{
+  const occ=config().habitPropertyBindings.occurrences;
+  const filter=JSON.parse(JSON.stringify(run('alfBoardHabitDayFilter',occ,day)));
+  assert.equal(filter.and[0].multi_select.contains,'عادة');
+  assert.equal(filter.and[1].or[0].date.equals,day);
+  const fallback=filter.and[1].or[1].and;
+  assert.equal(fallback[0].date.is_empty,true);
+  assert.equal(fallback[1].created_time.on_or_after,new Date(day+'T00:00:00').toISOString());
+  const tomorrow=new Date(day+'T00:00:00');
+  tomorrow.setDate(tomorrow.getDate()+1);
+  assert.equal(fallback[1].created_time.before,tomorrow.toISOString());
+});
+test('same original Notion view returns 9: six explicitly dated and three Created-today',async()=>{
+  // Reproduced from the 2026-11-21 "عادات اليوم" original Notion view:
+  // missing dates on النوم, المغرب, أذكار المساء (not missing definitions).
+  const rows=[
+    page(uid('4'),'الحمد',uid('a'),'In progress',['عادة','مهمة']),
+    page(uid('5'),'القران الكريم',uid('b'),'Done'),
+    page(uid('6'),'لا شطرنج',uid('c')),
+    page(uid('7'),'منشطات',uid('d')),
+    page(uid('8'),'وقت العمل',uid('e')),
+    page(uid('9'),'الترفيه',uid('f')),
+    page(uid('a'),'أذكار المساء',uid('1')),
+    page(uid('b'),'المغرب',uid('2')),
+    page(uid('c'),'النوم',uid('3'))
+  ];
+  for(const item of rows.slice(6)){
+    item.properties['يوم التنفيذ'].date=null;
+    item.created_time='2026-11-21T00:55:06.330Z';
+  }
+  const counters=rows.map((row,i)=>counter('habit-'+i,
+    row.properties['المصدر'].title[0].plain_text,
+    row.properties.Status.status.name==='Done'?1:0));
+  const f=fixture(rows,counters);
+  const sync=run('alfCreateBoardHabitsSync',f.api);
+  const result=await sync.runOnce();
+  assert.equal(result.errors,0);
+  assert.equal(result.processed,9);
+  assert.equal(result.matched,9);
+  assert.equal(result.missing,0);
+  const snapshot=JSON.parse(f.saved.get('alf-board-habits-today-v1'));
+  assert.equal(snapshot.rows.length,9);
+  for(const name of ['أذكار المساء','المغرب','النوم']){
+    assert.equal(snapshot.rows.filter(r=>r.title===name&&r.day===day).length,1);
+  }
+  const filter=f.events.find(e=>e[0]==='notion'&&e[1]==='POST')[3].filter;
+  assert.equal(filter.and[1].or[1].and[0].date.is_empty,true);
+  assert.equal(f.events.filter(e=>e[0]==='notion'&&e[1]==='PATCH').length,0);
+});
+test('empty execution date from YESTERDAY is rejected, without an accidental status write',async()=>{
+  const yesterday=page(uid('4'),'النوم',uid('5'),'Not started');
+  yesterday.properties['يوم التنفيذ'].date=null;
+  yesterday.created_time='2026-11-20T12:00:00.000Z';
+  const f=fixture([yesterday],[counter('sleep','النوم',1)]);
+  const result=await run('alfCreateBoardHabitsSync',f.api).runOnce();
+  assert.equal(result.processed,0);
+  assert.equal(result.conflicts,1);
+  assert.equal(f.events.filter(e=>e[0]==='notion'&&e[1]==='PATCH').length,0);
+});
+test('marking a Created-today habit complete succeeds with exact page identity without changing its date',async()=>{
+  const p=page(uid('4'),'المغرب',uid('5'));
+  p.properties['يوم التنفيذ'].date=null;
+  p.created_time='2026-11-21T00:55:06.330Z';
+  const f=fixture([p]);
+  const done=await run('alfCompleteBoardHabit',f.api,{
+    pageId:p.id,definitionId:uid('5'),day,
+    title:'المغرب',expectedStatus:'Not started'
+  });
+  assert.equal(done.completed,true);
+  assert.equal(p.properties.Status.status.name,'Done');
+  assert.equal(p.properties['يوم التنفيذ'].date,null);
+});

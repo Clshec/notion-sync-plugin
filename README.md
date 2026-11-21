@@ -1,5 +1,11 @@
 # Alf Notion Super Productivity
 
+### v0.40.6 — parity with Notion's real daily-habits view (DRAFT)
+
+**Bug found against the live original \`عادات اليوم\` view on 2026-11-21:** v0.40.5 showed only the **six** habit pages whose \`يوم التنفيذ\` exactly matched today. The original Notion saved view actually has an **OR condition**: \`يوم التنفيذ = today\` **or** \`يوم التنفيذ is empty AND Created = today\`, always with \`نوع الصفحة\` containing \`عادة\`. Its currently observed actual saved-view result is **nine**, with **three** previously invisible real original records: **أذكار المساء**, **المغرب**, and **النوم**. The user reports ten in their Notion UI, but the Notion connector saved-view query returned nine records (no more pages), so the tenth must not be invented or imported from a different day.
+
+The host-side automatic daily mirror and the normal in-plugin completion write preflight now both use the original saved-view OR logic and an exact device-local day boundary. An undated original row remains undated in Notion; no new Notion DBs or pages are generated. Undated yesterday records stay excluded; dated records from other days cannot fall back via creation time. This works with the existing saved one-token connection, without user import, reconnection, or setup intervention. Additional tests cover view parity, the actual 6+3 breakdown, yesterday exclusion, and undated completion.
+
 ### v0.40.5 — one-token automatic daily Habits mirror and safe native-counter reconciliation (DRAFT)
 
 The **original dated «اللوح» daily occurrence** (not the separate «قاعدة العادات» definition) is the authoritative day-by-day execution source. After the user grants their original Notion sources and connects **one token**, the running plugin automatically polls only today's original \`نوع الصفحة\` containing \`عادة\` and \`يوم التنفيذ\` equal to SP's logical day. **No AI, manual import, per-habit mapping, extra approval, or webhook server is necessary.** The Notion definition relation is used only as immutable identity, not to fabricate additional daily work.

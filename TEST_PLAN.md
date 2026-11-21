@@ -1,4 +1,12 @@
-# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.5 experimental)
+# Alf Notion ↔ Super Productivity — acceptance plan (v0.40.6 experimental)
+
+## v0.40.6 — match Notion's saved \`عادات اليوم\` filter exactly
+
+1. Read the original saved view \`view://36eb4a62-4b7d-8039-9ee8-000ccb8db33a\` and verify its filter: \`نوع الصفحة\` contains \`عادة\`, and either execution day is today, **or** execution day is empty and Created local day is today.
+2. Confirm the live 2026-11-21 view's three undated originals (**أذكار المساء**, **المغرب**, **النوم**) appear after the existing six dated originals without requesting a second connect/import operation. Do not silently change any original \`يوم التنفيذ\` date to achieve this.
+3. Reject yesterday's undated originals, and reject dates explicitly set to a different day even if their Created field is today. The same criteria apply to the completion-button preflight and the automatic native-counter reconciliation, with duplicate and identity guards still in effect.
+4. One-token automatic host polling should update the existing SP UI snapshot without any client action. Reopen the plugin panel after installation, inspect the visible habit count, and verify no duplicates or unintended Notion write calls.
+5. The connected Notion saved-view query returned **nine** rows (has_more=false), while the user reports **ten** in their Notion UI. This discrepancy remains open until a tenth *actual* original page ID or a refreshed saved-view record is identified. Never silently invent it or treat a habit definition as the missing daily occurrence.
 
 ## v0.40.5 — zero-setup original daily Habits acceptance
 
