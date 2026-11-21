@@ -1,5 +1,13 @@
 # Alf Notion Super Productivity
 
+### v0.40.4 — automatic, bounded historical Notion-to-SP import (DRAFT)
+
+After the one-token source verification, the local graph engine now considers **all** verified original Notion small-project records and eligible board tasks/bundles, including old `Done` records, rather than only records created since the activation timestamp. It preserves original Notion page IDs in SP task markers and independently persisted links. Completed historical rows use the native SP `addTask({isDone:true})` flag and carry their original `dueDay`; missing dates are explicitly null so they cannot accidentally become Today work. A root task is created before its subtasks. Today's open daily tasks are preferred ahead of older completed tasks.
+
+Historical imports run in **up to six native SP create/adopt operations per cycle**, resuming after app restart based on exact links and checking for same-day title collisions again at the write boundary. The >40 guard remains for potentially unsafe *SP→Notion* mass export, but not for the requested *Notion→SP* historical import. A pending local backlog keeps the lightweight local polling engine draining without requiring a user import button, AI tool or manual workflow. Ambiguous identities remain conflicts rather than silently adopting unrelated content; cancelled status and the upper project hierarchy need a separate, explicit mapping.
+
+**Validation:** All **53** graph regression cases passed in a JavaScript compatibility harness (not the native Node test runner). A separate synthetic import of 52 dated old rows completed in nine batches, retaining 51 completed statuses and no repeat create on the second pass. The Windows bridge remains disconnected; v0.40.4 has **not** been installed in the user's main SP profile, exercised through the real Windows plugin host, or approved by Woodpecker. Persistent native creation of absent Habits counters is still blocked in SP v20 because the public plugin API exposes counter values but not the persistent `addSimpleCounter` action (the internal action is excluded from allowed plugin dispatch).
+
 ### v0.40.3 — original daily rows with both «عادة» and «مهمة» (DRAFT)
 
 **Zero-AI runtime:** The integration itself remains deterministic and local: once the user has granted the original Notion sources and entered one Notion integration token, no AI agent, separate web service, manual task registration or per-day intervention is required for the supported task/project graph.
