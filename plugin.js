@@ -3048,7 +3048,11 @@ function alfGraphOnlyNewEntities(plan,sinceMs,options={}){
   }
   // Never import a subtask before its parent. Among top-level tasks, do
   // today's executable work before older completed history.
-  const dateToday=new Date().toISOString().slice(0,10);
+  // Use the host's LOCAL logical calendar day, not UTC midnight: SP's
+  // Today/Planner is device-local and Notion dates are date-only values.
+  const now=new Date();
+  const dateToday=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),
+    String(now.getDate()).padStart(2,'0')].join('-');
   const urgency=t=>t.status==='Done'?3:
     t.due===dateToday?0:t.due?1:2;
   tasks.sort((a,b)=>Number(!!a.parent)-Number(!!b.parent)||
