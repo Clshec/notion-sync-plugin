@@ -2099,6 +2099,17 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
     if(claims.length){
       result.skipped++;continue;
     }
+    // Recheck titles AFTER every native mutation. Two original Notion pages
+    // created for one day must not bypass duplicate detection merely because
+    // neither existed in the first inventory snapshot. Distinct dated
+    // occurrences (e.g. yesterday/today الحمد) remain independent.
+    const targetProject=projectId||'INBOX_PROJECT';
+    const sameDayCollision=all.some(sp=>
+      sp&&sp.projectId===targetProject&&
+      alfGraphName(sp.title)===alfGraphName(t.title)&&
+      !(t.due&&typeof sp.dueDay==='string'&&
+        /^\\d{4}-\\d{2}-\\d{2}$/.test(sp.dueDay)&&sp.dueDay!==t.due));
+    if(sameDayCollision){result.skipped++;continue;}
     const linkKey=alfGraphTaskLinkKey(t.id);
     if(await alfGraphExistingTaskLink(api,t.id)){result.skipped++;continue;}
     try{
