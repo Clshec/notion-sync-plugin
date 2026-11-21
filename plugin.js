@@ -2105,7 +2105,7 @@ async function alfGraphApplyLocal(api,inventory,plan,options={}) {
     // occurrences (e.g. yesterday/today الحمد) remain independent.
     const targetProject=projectId||'INBOX_PROJECT';
     const sameDayCollision=all.some(sp=>
-      sp&&sp.projectId===targetProject&&
+      sp&&(sp.projectId||'INBOX_PROJECT')===targetProject&&
       alfGraphName(sp.title)===alfGraphName(t.title)&&
       !(t.due&&typeof sp.dueDay==='string'&&
         /^\d{4}-\d{2}-\d{2}$/.test(sp.dueDay)&&sp.dueDay!==t.due));
