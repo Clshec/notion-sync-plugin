@@ -21,6 +21,12 @@ test('reconnecting the same Alf Notion sources preserves device writer authoriza
     projectSource:uuid('3'),unit:'hours',typeValues:'مهمة, حزمة',
     alfProfile:{name:'alf-life-os',upperSource:uuid('4'),
       lowerSource:uuid('3')},
+    habitPropertyBindings:{
+      definitions:{habitTitleProp:{id:'ht',sourceId:uuid('2'),input:'habit'},
+        habitCadenceProp:{id:'hc',sourceId:uuid('2'),input:'cadence'}},
+      occurrences:{habitOccTypeProp:{id:'hot',sourceId:uuid('1'),input:'type'},
+        habitOccRelationProp:{id:'hor',sourceId:uuid('1'),input:'relation'},
+        habitOccDayProp:{id:'hod',sourceId:uuid('1'),input:'day'}}},
     taskPropertyBindings:Object.fromEntries(
       Array.from({length:8},(_,i)=>['f'+i,{
         id:'id'+i,sourceId:uuid('1'),input:'field'+i}]))
@@ -32,10 +38,16 @@ test('reconnecting the same Alf Notion sources preserves device writer authoriza
   assert.equal(same(cfg,{...cfg,taskPropertyBindings:{
     ...cfg.taskPropertyBindings,f0:{...cfg.taskPropertyBindings.f0,id:'other'}
   }}),false);
+  assert.equal(same(cfg,{...cfg,habitPropertyBindings:{
+    ...cfg.habitPropertyBindings,occurrences:{
+      ...cfg.habitPropertyBindings.occurrences,
+      habitOccDayProp:{...cfg.habitPropertyBindings.occurrences.habitOccDayProp,
+        id:'changed-day-id'}}}}),false,
+    'changed daily-habit pin revokes previous writer authorization');
   const body=html.slice(html.indexOf('async function alfQuickConnect()'),
     html.indexOf('function dataSourceId(value'));
   assert.match(body,/if\(credentialChanged\)\{\s*await alfQuickDisableDeviceWriters\(\)/);
-  assert.match(body,/if\(!alfQuickSameWorkBinding\(existingMapping,discovery\.config\)\)\s*await alfQuickDisableDeviceWriters\(\)/);
+  assert.match(body,/var workBindingChanged=!alfQuickSameWorkBinding\(\s*existingMapping,discovery\.config\);\s*if\(workBindingChanged\)\s*await alfQuickDisableDeviceWriters\(\)/);
 });
 
 function mount(customRows, habitRows, taskPages, initialConfig) {
@@ -745,7 +757,7 @@ test('duplicate daily occurrences for one habit/day stay visible but unlinked',a
   assert.match(env.els('dailyHabitsReport').textContent,/2 علاقة ناقصة أو مكررة/);
 });
 
-test('Alf mixed task+habit page is excluded from SP task preview and import',async()=>{
+test('Alf mixed task+habit page is included in task preview without duplicate or implicit import',async()=>{
   const row=aDailyBoardRow('mixed-habit','Read 20m','2026-11-16','habitA',
     ['مهمة','عادة']);
   const env=mount([row],null,null,{
@@ -761,8 +773,8 @@ test('Alf mixed task+habit page is excluded from SP task preview and import',asy
   env.els('token').value='ntn_SYNTHETIC_NOT_REAL';
   await env.els('save').events.click();
   await env.els('previewBtn').events.click();
-  assert.equal(env.els('results').children.length,0,
-    'one mixed daily habit cannot also become a normal SP task');
+  assert.equal(env.els('results').children.length,1,
+    'same original daily habit can expose its task facet without losing the habit facet');
   assert.equal(env.imports.length,0);
   assert.equal(env.requests.filter(r=>r.opts.method==='PATCH').length,0);
 });
@@ -2002,14 +2014,13 @@ test('manual habit-day preview and writeback refuse missing pagination cursor',a
 });
 
 
-test('plugin intro discloses three optional automations and never claims all syncing is manual',()=>{
-  assert.ok(html.includes('EXPERIMENTAL · AUTO SYNC OFF BY DEFAULT'));
-  assert.ok(html.includes('Three narrowly scoped automatic modes are available'));
-  assert.ok(html.includes('disabled by default'));
+test('plugin intro makes one-token core sync automatic and keeps legacy controls advanced',()=>{
+  assert.ok(html.includes('EXPERIMENTAL · CORE SYNC STARTS AFTER TOKEN CONNECTION'));
+  assert.ok(html.includes('Verified one-token connection enables core'));
+  assert.ok(html.includes('legacy habit/Pomodoro features'));
   assert.ok(!html.includes('No automatic sync, database creation or SuperSync modification.'));
-  assert.ok(html.includes('No Notion database, property or day-record creation'));
-  assert.ok(html.includes('separate device-local opt-in'),
-    'footer and intro both state narrowly scoped auto behavior');
+  assert.ok(html.includes('Notion databases and properties are never created by discovery'));
+  assert.ok(html.includes('Complete rich-text body sync and cross-device simultaneous writers are not yet accepted'));
   assert.match(manifest.version,/^0\.\d+\.\d+$/);
 });
 
